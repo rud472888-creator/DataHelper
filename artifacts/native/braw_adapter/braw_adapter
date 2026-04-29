@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import math
+import os
+import pathlib
+import subprocess
+import sys
+
+ADAPTER_VERSION = "stage08-native-sdk-0.1"
+ROOT = pathlib.Path(__file__).resolve().parent
+PROBE = ROOT / "braw_probe"
+EXTRACT = ROOT / "braw_frame_extract"
+SDK_LIBRARIES = pathlib.Path("/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries")
+SDK_INCLUDE = pathlib.Path("/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Include/BlackmagicRawAPI.h")
+
+def respond(payload: dict) -> None:
+    sys.stdout.write(json.dumps(payload, separators=(",", ":")))
+
+def fail(request_id: str, status: str, code: str, message: str, detail: dict | None = None) -> None:
+    respond({"request_id": request_id, "ok": False, "adapter_name": "braw_adapter", "adapter_version": ADAPTER_VERSION, "status": status, "warnings": [], "errors": [{"code": code, "message": message, "detail": detail or {}}], "metadata_raw": {"sdk_libraries": str(SDK_LIBRARIES), "sdk_header": str(SDK_INCLUDE)}})
+
+def deps_error() -> str | None:
+    missing = [str(p) for p in (SDK_INCLUDE, SDK_LIBRARIES, PROBE, EXTRACT) if not p.exists()]
+    if missing:
+        return "Missing Blackmagic RAW SDK/runtime or adapter helper(s): " + ", ".join(missing) + ". Install Blackmagic RAW SDK 5.1 and rebuild artifacts/native/braw_adapter."
+    return None
+
+def run_probe(src: str) -> dict[str, str]:
+    cp = subprocess.run([str(PROBE), src], text=True, capture_output=True, timeout=60)
+    if cp.returncode != 0:
+        raise RuntimeError((cp.stderr or cp.stdout or "braw_probe failed").strip())
+    out: dict[str, str] = {}
+    for line in cp.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+def fps_fraction(value: str) -> tuple[int, int]:
+    f = float(value)
+    common = [(24000,1001),(24,1),(25,1),(30000,1001),(30,1),(50,1),(60000,1001),(60,1)]
+    return min(common, key=lambda p: abs(p[0] / p[1] - f))
+
+def probe_response(req: dict) -> None:
+    rid = str(req.get("request_id", ""))
+    err = deps_error()
+    if err:
+        return fail(rid, "dependency_missing", "dependency_missing", err)
+    src = str((req.get("input") or {}).get("source_path") or "")
+    try:
+        meta = run_probe(src)
+        fps_num, fps_den = fps_fraction(meta.get("fps", "0"))
+        fc = int(meta["frame_count"])
+        dur = fc / (fps_num / fps_den) if fps_num else None
+        clip = {"clip_name": pathlib.Path(src).name, "format_family": "braw", "container": "BRAW", "codec": "braw_native_sdk", "frame_count": fc, "duration_seconds": dur, "fps_num": fps_num, "fps_den": fps_den, "width": int(meta["width"]), "height": int(meta["height"]), "start_timecode": meta.get("start_timecode"), "camera_make": meta.get("manufacturer"), "camera_model": meta.get("camera_type"), "camera_id": meta.get("camera_id"), "reel": meta.get("reel_name")}
+    except Exception as exc:
+        return fail(rid, "probe_failed", "probe_failed", str(exc), {"source_path": src})
+    respond({"request_id": rid, "ok": True, "adapter_name": "braw_adapter", "adapter_version": ADAPTER_VERSION, "status": "success", "warnings": [], "errors": [], "clip": clip, "metadata_raw": {"sdk_libraries": str(SDK_LIBRARIES), "native_metadata": meta}})
+
+def capture_response(req: dict) -> None:
+    rid = str(req.get("request_id", ""))
+    err = deps_error()
+    if err:
+        return fail(rid, "dependency_missing", "dependency_missing", err)
+    src = str((req.get("input") or {}).get("source_path") or "")
+    staging = pathlib.Path(str((req.get("options") or {}).get("staging_dir") or "."))
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        meta = run_probe(src); fps_num, fps_den = fps_fraction(meta.get("fps", "0")); fps = fps_num / fps_den; frame_count = int(meta["frame_count"])
+    except Exception as exc:
+        return fail(rid, "decode_failed", "decode_failed", str(exc), {"source_path": src})
+    captures = []
+    for i, point in enumerate(req.get("capture_points") or [], start=1):
+        label = str(point.get("label", f"Frame{i}"))
+        frame = point.get("requested_frame_index")
+        if frame is None:
+            frame = round(float(point.get("requested_ratio", 0)) * max(frame_count - 1, 0))
+        frame = max(0, min(int(frame), max(frame_count - 1, 0)))
+        out = staging / f"{i:02d}_{label.lower()}_{frame:06d}.png"
+        cp = subprocess.run([str(EXTRACT), src, str(frame), str(out)], text=True, capture_output=True, timeout=120)
+        if cp.returncode != 0 or not out.exists():
+            captures.append({"label": label, "requested_ratio": point.get("requested_ratio"), "requested_frame_index": point.get("requested_frame_index"), "requested_seconds": point.get("requested_seconds"), "actual_frame_index": frame, "actual_seconds": frame / fps if fps else None, "actual_timecode": None, "actual_timecode_source": "native_adapter", "image_path_temp": None, "duplicate_of": None, "status": "decode_failed", "warnings": [], "errors": [{"code": "decode_failed", "message": (cp.stderr or cp.stdout or "native BRAW frame extraction failed").strip(), "detail": {}}]})
+        else:
+            captures.append({"label": label, "requested_ratio": point.get("requested_ratio"), "requested_frame_index": point.get("requested_frame_index"), "requested_seconds": point.get("requested_seconds"), "actual_frame_index": frame, "actual_seconds": frame / fps if fps else None, "actual_timecode": meta.get("start_timecode") if frame == 0 else None, "actual_timecode_source": "native_adapter", "image_path_temp": str(out), "duplicate_of": None, "status": "success", "warnings": [], "errors": []})
+    respond({"request_id": rid, "ok": True, "adapter_name": "braw_adapter", "adapter_version": ADAPTER_VERSION, "status": "success", "warnings": [], "errors": [], "captures": captures, "metadata_raw": {"sdk_libraries": str(SDK_LIBRARIES), "native_metadata": meta}})
+
+def main() -> int:
+    try:
+        req = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError as exc:
+        fail("", "probe_failed", "invalid_response", f"Invalid JSON request: {exc}"); return 0
+    cmd = req.get("command"); rid = str(req.get("request_id", ""))
+    if cmd == "version":
+        err = deps_error(); respond({"request_id": rid, "ok": err is None, "adapter_name": "braw_adapter", "adapter_version": ADAPTER_VERSION, "status": "success" if err is None else "dependency_missing", "warnings": [], "errors": [] if err is None else [{"code": "dependency_missing", "message": err, "detail": {}}], "metadata_raw": {"sdk_header": str(SDK_INCLUDE), "sdk_libraries": str(SDK_LIBRARIES)}}); return 0
+    if cmd == "probe": probe_response(req); return 0
+    if cmd == "capture": capture_response(req); return 0
+    fail(rid, "probe_failed", "unsupported_format", f"Unsupported adapter command: {cmd}"); return 0
+if __name__ == "__main__":
+    raise SystemExit(main())

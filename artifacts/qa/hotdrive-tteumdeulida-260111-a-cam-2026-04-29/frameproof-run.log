@@ -1,0 +1,10 @@
+status: success
+total_clips: 90
+success_count: 90
+partial_success_count: 0
+probe_failed_count: 0
+decode_failed_count: 0
+skipped_count: 0
+pdf_path: artifacts/qa/hotdrive-tteumdeulida-260111-a-cam-2026-04-29/260111-a-cam-contact-sheet.pdf
+csv_path: artifacts/qa/hotdrive-tteumdeulida-260111-a-cam-2026-04-29/260111-a-cam-contact-sheet.csv
+json_path: artifacts/qa/hotdrive-tteumdeulida-260111-a-cam-2026-04-29/260111-a-cam-contact-sheet.json

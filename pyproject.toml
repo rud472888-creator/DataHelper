@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frameproof"
+version = "0.1.0"
+description = "Frame Proof standard video CLI pipeline."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Frame Proof" }]
+dependencies = [
+  "Pillow>=10.0",
+  "PySide6>=6.7",
+  "reportlab>=4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.10",
+  "pytest>=8.0",
+  "ruff>=0.4.0",
+]
+
+[project.scripts]
+frameproof = "frameproof.cli:main"
+frameproof-gui = "frameproof.gui.__main__:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true

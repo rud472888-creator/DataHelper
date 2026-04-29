@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""JSON stdin/stdout BRAW adapter backed by Blackmagic RAW SDK helper.
+
+This adapter is intentionally a thin process boundary for DataHelper's existing
+--braw-adapter-path contract. It shells only to the repo-local native helper,
+which links against the locally installed Blackmagic RAW SDK/runtime.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import subprocess
+import sys
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+ADAPTER_NAME = "braw_adapter"
+ADAPTER_VERSION = "2.0.0-native-sdk"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_HELPER = REPO_ROOT / "tools" / "braw_native_helper"
+DEFAULT_SDK_LIBRARIES = Path("/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries")
+
+
+def _response(request_id: str | None, ok: bool, status: str, **extra: Any) -> dict[str, Any]:
+    data: dict[str, Any] = {
+        "request_id": request_id,
+        "ok": ok,
+        "adapter_name": ADAPTER_NAME,
+        "adapter_version": ADAPTER_VERSION,
+        "status": status,
+        "warnings": [],
+        "errors": [],
+        "metadata_raw": {},
+    }
+    data.update(extra)
+    return data
+
+
+def _error(request_id: str | None, status: str, message: str, code: str = "dependency_missing") -> dict[str, Any]:
+    return _response(
+        request_id,
+        False,
+        status,
+        errors=[{"code": code, "message": message}],
+    )
+
+
+def _dependency_error(request_id: str | None, detail: str) -> dict[str, Any]:
+    return _error(
+        request_id,
+        "dependency_missing",
+        "Blackmagic RAW SDK-backed adapter is unavailable. "
+        "Install Blackmagic RAW SDK 5.1 for macOS and ensure "
+        f"{DEFAULT_HELPER} exists and {DEFAULT_SDK_LIBRARIES} is readable. Detail: {detail}",
+    )
+
+
+def _helper_path() -> Path:
+    return Path(os.environ.get("FRAMEPROOF_BRAW_NATIVE_HELPER", str(DEFAULT_HELPER)))
+
+
+def _sdk_libraries_path() -> Path:
+    return Path(os.environ.get("BLACKMAGIC_RAW_SDK_LIBRARIES", str(DEFAULT_SDK_LIBRARIES)))
+
+
+def _check_dependencies() -> str | None:
+    helper = _helper_path()
+    libs = _sdk_libraries_path()
+    if not helper.exists():
+        return f"native helper not found: {helper}"
+    if not os.access(helper, os.X_OK):
+        return f"native helper is not executable: {helper}"
+    if not libs.exists():
+        return f"SDK libraries path not found: {libs}"
+    if not (libs / "BlackmagicRawAPI.framework").exists():
+        return f"BlackmagicRawAPI.framework not found under SDK libraries path: {libs}"
+    return None
+
+
+def _run_helper(args: list[str]) -> dict[str, Any]:
+    cmd = [str(_helper_path()), *args, str(_sdk_libraries_path())]
+    completed = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120)
+    output = (completed.stdout or "").strip()
+    if not output:
+        return {"ok": False, "error": (completed.stderr or "native helper returned no output").strip()}
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": f"native helper returned invalid JSON: {output[:500]}"}
+    if completed.returncode != 0 and parsed.get("ok") is not False:
+        parsed = {"ok": False, "error": completed.stderr or output}
+    return parsed
+
+
+def _fps_parts(fps: float) -> tuple[int, int]:
+    if fps <= 0 or not math.isfinite(fps):
+        return 0, 1
+    frac = Fraction(fps).limit_denominator(1001)
+    return frac.numerator, frac.denominator
+
+
+def _source_path(payload: dict[str, Any]) -> Path:
+    source = payload.get("input", {}).get("source_path") or payload.get("source_path")
+    if not source:
+        raise ValueError("missing input.source_path")
+    return Path(source)
+
+
+def _probe_payload(request_id: str | None, source_path: Path) -> dict[str, Any]:
+    dep = _check_dependencies()
+    if dep:
+        return _dependency_error(request_id, dep)
+    result = _run_helper(["probe", str(source_path)])
+    if not result.get("ok"):
+        return _error(request_id, "probe_failed", str(result.get("error", "BRAW probe failed")), "probe_failed")
+
+    fps = float(result.get("fps") or 0.0)
+    fps_num, fps_den = _fps_parts(fps)
+    frame_count = int(result.get("frame_count") or 0)
+    width = int(result.get("width") or 0)
+    height = int(result.get("height") or 0)
+    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
+    clip = {
+        "clip_name": source_path.name,
+        "format_family": "braw",
+        "codec": "blackmagic_raw_native_sdk",
+        "frame_count": frame_count,
+        "duration_seconds": float(result.get("duration_seconds") or 0.0),
+        "fps_num": fps_num,
+        "fps_den": fps_den,
+        "width": width,
+        "height": height,
+        "start_timecode": result.get("start_timecode") or None,
+        "metadata_complete": True,
+    }
+    return _response(
+        request_id,
+        True,
+        "success",
+        clip=clip,
+        metadata_raw={
+            "sdk": "Blackmagic RAW SDK",
+            "sdk_libraries_path": str(_sdk_libraries_path()),
+            "native_helper": str(_helper_path()),
+            "native_no_proxy": True,
+            "blackmagic_raw_metadata": metadata,
+        },
+    )
+
+
+def _capture(payload: dict[str, Any]) -> dict[str, Any]:
+    request_id = payload.get("request_id")
+    source_path = _source_path(payload)
+    dep = _check_dependencies()
+    if dep:
+        return _dependency_error(request_id, dep)
+
+    probe_response = _probe_payload(request_id, source_path)
+    if not probe_response.get("ok"):
+        return probe_response
+    clip = probe_response["clip"]
+    frame_count = int(clip.get("frame_count") or 0)
+    fps = (float(clip.get("fps_num") or 0) / float(clip.get("fps_den") or 1)) if clip.get("fps_num") else 0.0
+    staging_dir = Path(payload.get("options", {}).get("staging_dir") or ".")
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    captures = []
+    for index, point in enumerate(payload.get("capture_points") or [], start=1):
+        requested_index = point.get("requested_frame_index")
+        if requested_index is None:
+            ratio = float(point.get("requested_ratio") or 0.0)
+            requested_index = round(max(0.0, min(1.0, ratio)) * max(frame_count - 1, 0))
+        actual_index = max(0, min(int(requested_index), max(frame_count - 1, 0)))
+        label = str(point.get("label") or f"frame_{index}")
+        safe_label = "".join(ch.lower() if ch.isalnum() else "_" for ch in label).strip("_") or f"frame_{index}"
+        output_path = staging_dir / f"{index:02d}_{safe_label}_{actual_index}.png"
+        result = _run_helper(["capture", str(source_path), str(actual_index), str(output_path)])
+        if result.get("ok"):
+            status = "success"
+            errors: list[dict[str, str]] = []
+            image_path = str(output_path)
+        else:
+            status = "decode_failed"
+            errors = [{"code": "decode_failed", "message": str(result.get("error", "BRAW capture failed"))}]
+            image_path = None
+        actual_seconds = (actual_index / fps) if fps > 0 else None
+        captures.append(
+            {
+                "label": label,
+                "requested_ratio": point.get("requested_ratio"),
+                "requested_frame_index": point.get("requested_frame_index"),
+                "requested_seconds": point.get("requested_seconds"),
+                "actual_frame_index": actual_index,
+                "actual_seconds": actual_seconds,
+                "actual_timecode": clip.get("start_timecode") if actual_index == 0 else None,
+                "actual_timecode_source": "native_adapter" if actual_index == 0 and clip.get("start_timecode") else None,
+                "image_path_temp": image_path,
+                "duplicate_of": None,
+                "status": status,
+                "warnings": [],
+                "errors": errors,
+            }
+        )
+    ok = all(capture["status"] == "success" for capture in captures)
+    return _response(
+        request_id,
+        ok,
+        "success" if ok else "decode_failed",
+        captures=captures,
+        metadata_raw={
+            "native_no_proxy": True,
+            "sdk_libraries_path": str(_sdk_libraries_path()),
+            "native_helper": str(_helper_path()),
+        },
+    )
+
+
+def main() -> int:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        request_id = payload.get("request_id")
+        command = payload.get("command")
+        if command == "version":
+            dep = _check_dependencies()
+            if dep:
+                response = _dependency_error(request_id, dep)
+            else:
+                response = _response(
+                    request_id,
+                    True,
+                    "success",
+                    metadata_raw={
+                        "native_no_proxy": True,
+                        "sdk_libraries_path": str(_sdk_libraries_path()),
+                        "native_helper": str(_helper_path()),
+                    },
+                )
+        elif command == "probe":
+            response = _probe_payload(request_id, _source_path(payload))
+        elif command == "capture":
+            response = _capture(payload)
+        else:
+            response = _error(request_id, "invalid_request", f"unsupported command: {command}", "invalid_request")
+        sys.stdout.write(json.dumps(response, ensure_ascii=False))
+        return 0 if response.get("ok") else 2
+    except Exception as exc:  # noqa: BLE001 - adapter boundary must return structured JSON
+        sys.stdout.write(json.dumps(_error(None, "adapter_error", str(exc), "adapter_error")))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

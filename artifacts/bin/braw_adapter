@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import json
+import math
+import shutil
+import subprocess
+import sys
+from fractions import Fraction
+from pathlib import Path
+from typing import Any
+
+from PIL import Image, ImageDraw
+
+ADAPTER_NAME = "braw_adapter"
+ADAPTER_VERSION = "proxy-preview-0.1"
+
+
+def main() -> int:
+    try:
+        request = json.loads(sys.stdin.read() or "{}")
+    except json.JSONDecodeError:
+        return emit("invalid-request", False, "probe_failed", errors=[error("invalid_response", "Request was not valid JSON")])
+
+    request_id = str(request.get("request_id") or "")
+    command = request.get("command")
+    try:
+        if command == "version":
+            return emit(request_id, True, "success", metadata_raw={"mode": ADAPTER_VERSION})
+        if command == "probe":
+            return probe(request_id, request)
+        if command == "capture":
+            return capture(request_id, request)
+        return emit(request_id, False, "probe_failed", errors=[error("probe_failed", f"Unsupported command: {command}")])
+    except Exception as exc:
+        return emit(request_id, False, "probe_failed", errors=[error("probe_failed", str(exc))])
+
+
+def probe(request_id: str, request: dict[str, Any]) -> int:
+    source_path = Path(str(request.get("input", {}).get("source_path") or ""))
+    proxy_path = find_proxy(source_path)
+    stat = source_path.stat()
+    warnings: list[str] = []
+
+    if proxy_path is None:
+        warnings.append("No matching proxy media found; using minimal BRAW file metadata only.")
+        clip = {
+            "clip_name": source_path.name,
+            "format_family": "braw",
+            "frame_count": 1,
+            "duration_seconds": 1 / 24,
+            "fps_num": 24,
+            "fps_den": 1,
+            "container": "braw",
+            "codec": "braw",
+        }
+        return emit(
+            request_id,
+            True,
+            "metadata_incomplete",
+            warnings=warnings,
+            clip=clip,
+            metadata_raw={"source_size_bytes": stat.st_size, "proxy_path": None, "mode": ADAPTER_VERSION},
+        )
+
+    metadata = ffprobe(proxy_path)
+    fps_num, fps_den = parse_rate(str(metadata.get("avg_frame_rate") or metadata.get("r_frame_rate") or "24/1"))
+    duration = float(metadata.get("duration") or 0) or None
+    frame_count = parse_int(metadata.get("nb_frames"))
+    if frame_count is None and duration:
+        frame_count = max(1, int(round(duration * fps_num / fps_den)))
+    if duration is None and frame_count is not None:
+        duration = frame_count * fps_den / fps_num
+
+    warnings.append("BRAW preview frames are extracted from the matching Proxy media.")
+    clip = {
+        "clip_name": source_path.name,
+        "format_family": "braw",
+        "frame_count": frame_count or 1,
+        "duration_seconds": duration or (frame_count or 1) * fps_den / fps_num,
+        "fps_num": fps_num,
+        "fps_den": fps_den,
+        "width": parse_int(metadata.get("width")),
+        "height": parse_int(metadata.get("height")),
+        "container": "braw",
+        "codec": "braw_proxy_preview",
+    }
+    return emit(
+        request_id,
+        True,
+        "metadata_incomplete",
+        warnings=warnings,
+        clip=clip,
+        metadata_raw={"source_size_bytes": stat.st_size, "proxy_path": str(proxy_path), "mode": ADAPTER_VERSION},
+    )
+
+
+def capture(request_id: str, request: dict[str, Any]) -> int:
+    source_path = Path(str(request.get("input", {}).get("source_path") or ""))
+    staging_dir = Path(str(request.get("options", {}).get("staging_dir") or "."))
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    proxy_path = find_proxy(source_path)
+    captures: list[dict[str, Any]] = []
+
+    fps_num = 24
+    fps_den = 1
+    if proxy_path is not None:
+        metadata = ffprobe(proxy_path)
+        fps_num, fps_den = parse_rate(str(metadata.get("avg_frame_rate") or metadata.get("r_frame_rate") or "24/1"))
+
+    for index, point in enumerate(request.get("capture_points") or [], start=1):
+        label = str(point["label"])
+        requested_frame_index = point.get("requested_frame_index")
+        requested_seconds = point.get("requested_seconds")
+        seconds = float(requested_seconds) if requested_seconds is not None else None
+        if seconds is None and requested_frame_index is not None:
+            seconds = max(0.0, int(requested_frame_index) * fps_den / fps_num)
+        if seconds is None:
+            seconds = 0.0
+
+        output_path = staging_dir / f"{index:02d}_{safe_name(label)}.png"
+        warnings: list[str] = []
+        status = "success"
+        errors: list[dict[str, Any]] = []
+        if proxy_path is None:
+            warnings.append("No matching proxy media found; placeholder image generated.")
+            draw_placeholder(output_path, source_path.name, label)
+            status = "metadata_incomplete"
+        else:
+            ok, message = extract_frame(proxy_path, seconds, output_path)
+            warnings.append("Preview extracted from matching Proxy media.")
+            if not ok:
+                draw_placeholder(output_path, source_path.name, label)
+                status = "metadata_incomplete"
+                warnings.append(message)
+
+        captures.append(
+            {
+                "label": label,
+                "requested_ratio": point.get("requested_ratio"),
+                "requested_frame_index": requested_frame_index,
+                "requested_seconds": requested_seconds,
+                "actual_frame_index": requested_frame_index,
+                "actual_seconds": seconds,
+                "actual_timecode": None,
+                "actual_timecode_source": "elapsed_fallback",
+                "image_path_temp": str(output_path),
+                "duplicate_of": point.get("duplicate_of"),
+                "status": status,
+                "warnings": warnings,
+                "errors": errors,
+            }
+        )
+
+    return emit(request_id, True, "metadata_incomplete", warnings=["Proxy-backed BRAW preview adapter."], captures=captures)
+
+
+def find_proxy(source_path: Path) -> Path | None:
+    candidates = [
+        source_path.parent / "Proxy" / f"{source_path.stem}.mp4",
+        source_path.parent.parent / "Proxy" / f"{source_path.stem}.mp4",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def ffprobe(path: Path) -> dict[str, Any]:
+    exe = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
+    completed = subprocess.run(
+        [
+            exe,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,avg_frame_rate,r_frame_rate,nb_frames,duration",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    payload = json.loads(completed.stdout)
+    streams = payload.get("streams") or []
+    return dict(streams[0]) if streams else {}
+
+
+def extract_frame(proxy_path: Path, seconds: float, output_path: Path) -> tuple[bool, str]:
+    exe = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    completed = subprocess.run(
+        [
+            exe,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            f"{seconds:.6f}",
+            "-i",
+            str(proxy_path),
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=960:-1",
+            str(output_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode == 0 and output_path.exists():
+        return True, ""
+    return False, completed.stderr.strip() or f"ffmpeg exited {completed.returncode}"
+
+
+def draw_placeholder(path: Path, clip_name: str, label: str) -> None:
+    image = Image.new("RGB", (960, 540), (34, 38, 46))
+    draw = ImageDraw.Draw(image)
+    draw.text((40, 40), "BRAW preview unavailable", fill=(255, 255, 255))
+    draw.text((40, 80), clip_name, fill=(220, 225, 230))
+    draw.text((40, 120), label, fill=(190, 196, 204))
+    image.save(path)
+
+
+def parse_rate(value: str) -> tuple[int, int]:
+    try:
+        rate = Fraction(value)
+    except (ValueError, ZeroDivisionError):
+        return 24, 1
+    if rate.numerator <= 0 or rate.denominator <= 0:
+        return 24, 1
+    return rate.numerator, rate.denominator
+
+
+def parse_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def safe_name(value: str) -> str:
+    return "".join(char.lower() if char.isalnum() else "_" for char in value).strip("_") or "capture"
+
+
+def error(code: str, message: str) -> dict[str, Any]:
+    return {"code": code, "message": message, "detail": {}}
+
+
+def emit(
+    request_id: str,
+    ok: bool,
+    status: str,
+    *,
+    warnings: list[str] | None = None,
+    errors: list[dict[str, Any]] | None = None,
+    clip: dict[str, Any] | None = None,
+    captures: list[dict[str, Any]] | None = None,
+    metadata_raw: dict[str, Any] | None = None,
+) -> int:
+    response: dict[str, Any] = {
+        "request_id": request_id,
+        "ok": ok,
+        "adapter_name": ADAPTER_NAME,
+        "adapter_version": ADAPTER_VERSION,
+        "status": status,
+        "warnings": warnings or [],
+        "errors": errors or [],
+        "metadata_raw": metadata_raw or {},
+    }
+    if clip is not None:
+        response["clip"] = clip
+    if captures is not None:
+        response["captures"] = captures
+    sys.stdout.write(json.dumps(response))
+    return 0 if ok else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

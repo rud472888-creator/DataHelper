@@ -1,0 +1,40 @@
+# Reference example only.
+# This file documents the current settings shape and config-path convention.
+# It does not prove that arbitrary pipeline runs auto-load TOML today.
+
+[input]
+paths = [
+  "/path/to/media",
+]
+recursive = true
+extensions = ["mov", "mp4", "mxf", "avi", "braw", "r3d", "ari"]
+
+[capture]
+middle_count = 3
+profile = "preview_rec709_sdr"
+prefer_frame_index = true
+
+[report]
+layout = "contact_sheet"
+project_name = "Example Project"
+include_failed_section = true
+include_summary_page = true
+path_display = "basename"
+
+[output]
+pdf_path = "/path/to/output/frameproof-report.pdf"
+export_stills = false
+stills_dir = "/path/to/output/stills"
+write_csv = true
+write_json = true
+csv_path = "/path/to/output/frameproof-report.csv"
+json_path = "/path/to/output/frameproof-report.json"
+staging_dir = "/path/to/output/staging"
+
+[adapters]
+ffmpeg_path = "ffmpeg"
+ffprobe_path = "ffprobe"
+mediainfo_path = "mediainfo"
+braw_adapter_path = "/path/to/braw_adapter"
+r3d_adapter_path = "/path/to/r3d_adapter"
+arri_art_cmd_path = "/path/to/art-cmd"

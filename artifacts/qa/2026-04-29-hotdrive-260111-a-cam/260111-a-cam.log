@@ -1,0 +1,10 @@
+status: success
+total_clips: 90
+success_count: 90
+partial_success_count: 0
+probe_failed_count: 0
+decode_failed_count: 0
+skipped_count: 0
+pdf_path: artifacts/qa/2026-04-29-hotdrive-260111-a-cam/260111-a-cam.pdf
+csv_path: artifacts/qa/2026-04-29-hotdrive-260111-a-cam/260111-a-cam.csv
+json_path: artifacts/qa/2026-04-29-hotdrive-260111-a-cam/260111-a-cam.json

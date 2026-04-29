@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+set -eu
+
+exec "${FRAMEPROOF_ARRI_ART_CMD:-$HOME/Applications/ARRIReferenceToolCMD/1.0.0/bin/art-cmd}" "$@"
