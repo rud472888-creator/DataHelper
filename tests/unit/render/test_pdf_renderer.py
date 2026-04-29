@@ -23,7 +23,11 @@ from frameproof.core.models import (
 )
 from frameproof.render import render_pdf
 from frameproof.render.pdf_renderer import (
+    CONTACT_FRAME_CAPTION_HEIGHT,
+    CONTACT_FRAME_INSET,
+    CONTACT_SHEET_PAGE_SIZE,
     _clips_per_page,
+    _contact_usable_height,
     _display_image_path,
     _display_path,
     _fit_image,
@@ -249,7 +253,7 @@ def test_render_pdf_contact_sheet_failed_section_shows_full_path_when_requested(
 
     text = pdf_text(pdf_path)
     assert "Layout B / contact_sheet" in text
-    assert "CLIP REVIEW PDF / PREVIEW ONLY, NOT COLOR-CRITICAL" in text
+    assert "CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL" in text
     assert "Original media untouched; PDF uses embedded preview frames only." in text
     assert "Failed / Partial Clips" in text
     assert "Source: /show/day01/A001_C001.mov" in text
@@ -489,9 +493,16 @@ def test_contact_frame_measurement_uses_actual_image_aspect_ratio(tmp_path: Path
     frame = _measure_contact_frame(capture, "START", 0, 180.0)
 
     assert frame.aspect_ratio == 2.0
-    assert frame.image_width == 180.0
-    assert frame.image_height == 90.0
-    assert frame.total_height == frame.caption_height + frame.image_height
+    assert frame.card_width == 180.0
+    assert frame.image_width == 180.0 - (CONTACT_FRAME_INSET * 2)
+    assert frame.image_height == 78.0
+    assert frame.total_height == frame.caption_height + frame.image_height + CONTACT_FRAME_INSET
+
+
+def test_contact_sheet_page_size_is_a4_portrait_document() -> None:
+    width, height = CONTACT_SHEET_PAGE_SIZE
+
+    assert round(width / height, 4) == 0.7071
 
 
 def test_two_normal_contact_sheet_cards_pack_on_one_page(tmp_path: Path) -> None:
@@ -499,8 +510,8 @@ def test_two_normal_contact_sheet_cards_pack_on_one_page(tmp_path: Path) -> None
         make_triptych_item(tmp_path, "clip-1"),
         make_triptych_item(tmp_path, "clip-2"),
     )
-    card_width = 732.0
-    usable_height = 452.0
+    card_width = CONTACT_SHEET_PAGE_SIZE[0] - 48.0
+    usable_height = _contact_usable_height(CONTACT_SHEET_PAGE_SIZE)
     measurements = tuple(_measure_contact_clip_card(item, card_width, usable_height) for item in items)
 
     pages = _pack_contact_pages(measurements, usable_height)
@@ -509,14 +520,17 @@ def test_two_normal_contact_sheet_cards_pack_on_one_page(tmp_path: Path) -> None
     assert len(pages[0].items) == 2
 
 
-def test_three_normal_contact_sheet_cards_render_two_pages_without_stretching(tmp_path: Path) -> None:
+def test_three_normal_portrait_contact_sheet_cards_fit_without_stretching(tmp_path: Path) -> None:
     items = tuple(make_triptych_item(tmp_path, f"clip-{index}") for index in range(1, 4))
     pdf_path = tmp_path / "three-clips.pdf"
 
     render_pdf(pdf_path, make_settings(tmp_path, layout="contact_sheet"), items, make_summary())
 
-    assert pdf_page_count(pdf_path) == 2
-    measurements = tuple(_measure_contact_clip_card(item, 732.0, 452.0) for item in items)
+    assert pdf_page_count(pdf_path) == 1
+    measurements = tuple(
+        _measure_contact_clip_card(item, CONTACT_SHEET_PAGE_SIZE[0] - 48.0, _contact_usable_height(CONTACT_SHEET_PAGE_SIZE))
+        for item in items
+    )
     assert measurements[2].height == measurements[0].height
 
 
@@ -540,7 +554,7 @@ def test_mixed_aspect_contact_frames_share_top_with_natural_bottoms(tmp_path: Pa
 
     preview = _measure_contact_preview(item, 580.0)
 
-    assert {frame.caption_height for frame in preview.frames} == {24.0}
+    assert {frame.caption_height for frame in preview.frames} == {CONTACT_FRAME_CAPTION_HEIGHT}
     assert len({round(frame.total_height, 3) for frame in preview.frames}) == 3
     assert preview.height == max(frame.total_height for frame in preview.frames)
 
@@ -612,19 +626,18 @@ def test_preview_draw_path_uses_direct_image_and_one_point_border(tmp_path: Path
 
     _draw_contact_preview_block(fake, frame, 12.0, 200.0)
 
-    assert fake.round_rects == []
+    assert len(fake.round_rects) == 2
     assert fake.images == [
         {
-            "x": 12.0,
+            "x": 12.0 + CONTACT_FRAME_INSET,
             "y": 200.0 - frame.caption_height - frame.image_height,
-            "width": 180.0,
-            "height": 101.25,
+            "width": 156.0,
+            "height": 87.75,
             "preserveAspectRatio": False,
             "mask": "auto",
         }
     ]
-    assert 1 in fake.line_widths
-    assert any(rect["width"] == 180.0 and rect["height"] == 101.25 and rect["stroke"] == 1 for rect in fake.rects)
+    assert 0.8 in fake.line_widths
 
 
 def test_triptych_draws_mixed_aspect_images_from_same_top_y(tmp_path: Path, monkeypatch) -> None:
@@ -649,5 +662,5 @@ def test_triptych_draws_mixed_aspect_images_from_same_top_y(tmp_path: Path, monk
 
     image_tops = {round(image["y"] + image["height"], 3) for image in fake.images}
     image_bottoms = {round(image["y"], 3) for image in fake.images}
-    assert image_tops == {276.0}
+    assert image_tops == {274.0}
     assert len(image_bottoms) == 3

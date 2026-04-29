@@ -9,24 +9,25 @@ from typing import Iterable
 
 from PIL import Image, ImageOps
 from reportlab.lib import colors  # type: ignore[import-untyped]
-from reportlab.lib.pagesizes import landscape, letter  # type: ignore[import-untyped]
+from reportlab.lib.pagesizes import A4, landscape, letter  # type: ignore[import-untyped]
 from reportlab.lib.utils import ImageReader  # type: ignore[import-untyped]
 from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 
 from frameproof.config.settings import AppSettings, PathDisplayMode, ReportLayout
 from frameproof.core.models import BatchSummary, CapturePoint, ClipInfo, ClipStatus, ReportItem
 
-CONTACT_SHEET_PAGE_SIZE = landscape(letter)
+CONTACT_SHEET_PAGE_SIZE = A4
 DETAIL_PAGE_SIZE = landscape(letter)
-MARGIN = 30.0
-HEADER_HEIGHT = 76.0
+MARGIN = 20.0
+HEADER_HEIGHT = 84.0
 FOOTER_HEIGHT = 24.0
-BLOCK_GAP = 10.0
+BLOCK_GAP = 8.0
 FAILED_SECTION_TOP = 64.0
 CONTACT_CLIPS_PER_PAGE = 1
 CONTACT_PREVIEW_GAP = 10.0
-CONTACT_PREVIEW_MAX_WIDTH = 580.0
-CONTACT_FRAME_CAPTION_HEIGHT = 24.0
+CONTACT_PREVIEW_MAX_WIDTH = 505.0
+CONTACT_FRAME_CAPTION_HEIGHT = 26.0
+CONTACT_FRAME_INSET = 12.0
 PDF_IMAGE_MAX_PIXELS = 1600
 PDF_IMAGE_QUALITY = 86
 
@@ -36,6 +37,7 @@ class ContactFrameMeasurement:
     label: str
     capture: CapturePoint | None
     x: float
+    card_width: float
     caption_height: float
     image_width: float
     image_height: float
@@ -202,44 +204,46 @@ def _draw_contact_sheet_header(
     card_y = page_height - MARGIN - HEADER_HEIGHT
     card_w = page_width - (MARGIN * 2)
 
-    pdf.setFillColor(colors.HexColor("#F3F1EA"))
+    pdf.setFillColor(colors.HexColor("#F4F6F8"))
     pdf.rect(0, 0, page_width, page_height, fill=1, stroke=0)
-    pdf.setFillColor(colors.HexColor("#FBFAF7"))
-    pdf.setStrokeColor(colors.HexColor("#D4CCC0"))
-    pdf.roundRect(card_x, card_y, card_w, HEADER_HEIGHT, 12, fill=1, stroke=1)
+    pdf.setFillColor(colors.white)
+    pdf.setStrokeColor(colors.HexColor("#E4E8EE"))
+    pdf.roundRect(card_x, card_y, card_w, HEADER_HEIGHT, 8, fill=1, stroke=1)
 
     left_x = card_x + 18
     right_edge = card_x + card_w - 18
-    right_col_w = 328.0
-    pdf.setFillColor(colors.HexColor("#1F2328"))
-    pdf.setFont("Helvetica-Bold", 18)
-    pdf.drawString(left_x, top - 23, _ellipsize_for_width(pdf, project_name, right_edge - right_col_w - left_x - 10))
-    pdf.setFillColor(colors.HexColor("#5F6670"))
-    pdf.setFont("Helvetica-Bold", 8.8)
-    pdf.drawString(left_x, top - 42, "CLIP REVIEW PDF / PREVIEW ONLY, NOT COLOR-CRITICAL")
-    pdf.setFont("Helvetica", 9)
-    pdf.drawString(left_x, top - 60, f"Generated {generated_at}  •  Layout B / contact_sheet")
+    right_col_w = 238.0
+    _draw_header_mark(pdf, left_x, top - 21)
+    title_x = left_x + 94
+    pdf.setFillColor(colors.HexColor("#111820"))
+    pdf.setFont("Helvetica-Bold", 15.5)
+    pdf.drawString(title_x, top - 22, _ellipsize_for_width(pdf, project_name, right_edge - right_col_w - title_x - 8))
+    pdf.setFillColor(colors.HexColor("#69717D"))
+    pdf.setFont("Helvetica-Bold", 7.6)
+    pdf.drawString(left_x, top - 45, "CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL")
+    pdf.setFont("Helvetica", 7.4)
+    pdf.drawString(left_x, top - 60, f"Generated {generated_at}  -  Layout B / contact_sheet")
 
     failed_count = summary.probe_failed_count + summary.decode_failed_count + summary.skipped_count
     warnings_count = summary.partial_success_count + failed_count
-    badge_y = top - 25
+    badge_y = top - 21
     badge_specs = (
-        (f"{summary.total_clips} CLIPS", "#EBF1F7", "#1D5F8C"),
+        (f"{summary.total_clips} CLIPS", "#E9F4F8", "#26778C"),
         (f"{summary.success_count} SUCCESS", "#E8F4EC", "#1E7A46"),
-        (f"{warnings_count} WARNINGS", "#F2EFE8" if not warnings_count else "#FFF3E8", "#A35A00" if warnings_count else "#5F6670"),
+        (f"{warnings_count} WARNINGS", "#EFEFF1" if not warnings_count else "#FFF3E8", "#A35A00" if warnings_count else "#69717D"),
     )
     cursor_x = right_edge
     for label, fill, text_color in reversed(badge_specs):
-        badge_w = max(70.0, pdf.stringWidth(label, "Helvetica-Bold", 8) + 18)
+        badge_w = max(57.0, pdf.stringWidth(label, "Helvetica-Bold", 6.7) + 15)
         cursor_x -= badge_w
-        _draw_pill(pdf, cursor_x, badge_y - 12, badge_w, 18, label, fill, text_color)
-        cursor_x -= 6
+        _draw_pill(pdf, cursor_x, badge_y - 10, badge_w, 16, label, fill, text_color, font_size=6.7)
+        cursor_x -= 5
 
     pdf.setFillColor(colors.HexColor("#5F6670"))
-    pdf.setFont("Helvetica", 8.5)
+    pdf.setFont("Helvetica", 7.3)
     right_text_x = right_edge - right_col_w
-    pdf.drawString(right_text_x, top - 51, f"Source: {_ellipsize_for_width(pdf, input_summary, right_col_w)}")
-    pdf.drawString(right_text_x, top - 66, f"Page {page_number} / {total_pages}  •  Middle preview: 1 of {settings.capture.middle_count}")
+    pdf.drawString(right_text_x, top - 48, f"Source: {_ellipsize_for_width(pdf, input_summary, right_col_w)}")
+    pdf.drawString(right_text_x, top - 62, f"Page {page_number} of {total_pages}  -  Middle preview: 1 of {settings.capture.middle_count}")
 
 
 def _draw_clip_block(
@@ -252,34 +256,39 @@ def _draw_clip_block(
     width = measurement.width
     height = measurement.height
     bottom = y - height
-    pad = 12.0
-    pdf.setFillColor(colors.HexColor("#FBFAF7"))
-    pdf.setStrokeColor(colors.HexColor("#D4CCC0"))
-    pdf.roundRect(x, bottom, width, height, 7, fill=1, stroke=1)
+    pad = 11.0
+    pdf.setFillColor(colors.white)
+    pdf.setStrokeColor(colors.HexColor("#E5E9EF"))
+    pdf.roundRect(x, bottom, width, height, 8, fill=1, stroke=1)
 
     status_fill = _status_color(item.status)
-    badge_w = max(72.0, pdf.stringWidth(item.status.value.upper(), "Helvetica-Bold", 7) + 16)
-    _draw_pill(pdf, x + width - pad - badge_w, y - 23, badge_w, 15, item.status.value.upper(), status_fill, "#FFFFFF", font_size=7)
+    badge_w = max(64.0, pdf.stringWidth(item.status.value.upper(), "Helvetica-Bold", 6.3) + 14)
+    _draw_pill(pdf, x + width - pad - badge_w, y - 21, badge_w, 14, item.status.value.upper(), status_fill, "#FFFFFF", font_size=6.3)
 
-    pdf.setFillColor(colors.HexColor("#1F2328"))
-    pdf.setFont("Helvetica-Bold", 11.5)
-    pdf.drawString(x + pad, y - 17, _ellipsize_for_width(pdf, item.clip.clip_name, width - (pad * 3) - badge_w))
-    pdf.setFillColor(colors.HexColor("#5F6670"))
-    pdf.setFont("Helvetica-Bold", 6.4)
-    pdf.drawString(x + pad, y - 30, "TIMECODE")
-    pdf.setFillColor(colors.HexColor("#1F2328"))
-    pdf.setFont("Helvetica", 7.6)
-    pdf.drawString(x + pad + 44, y - 30, _ellipsize_for_width(pdf, _timecode_line(item).replace("Timecode: ", ""), width - (pad * 3) - badge_w - 44))
+    _draw_file_icon(pdf, x + pad, y - 12)
+    pdf.setFillColor(colors.HexColor("#111820"))
+    pdf.setFont("Helvetica-Bold", 9.7)
+    pdf.drawString(x + pad + 15, y - 16, _ellipsize_for_width(pdf, item.clip.clip_name, width - (pad * 3) - badge_w - 15))
+    pdf.setFillColor(colors.HexColor("#4D5561"))
+    pdf.setFont("Helvetica", 6.7)
+    pdf.drawString(x + pad, y - 29, "TIMECODE")
+    pdf.setFillColor(colors.HexColor("#111820"))
+    pdf.setFont("Helvetica", 6.7)
+    pdf.drawString(x + pad + 43, y - 29, _ellipsize_for_width(pdf, _timecode_line(item).replace("Timecode: ", ""), width - (pad * 3) - badge_w - 43))
 
-    grid_top = y - 37
+    pdf.setStrokeColor(colors.HexColor("#D9DEE5"))
+    pdf.setLineWidth(0.7)
+    pdf.line(x + pad, y - 36, x + width - pad, y - 36)
+
+    grid_top = y - 45
     _draw_contact_metadata_grid(pdf, item.clip, x + pad, grid_top, width - (pad * 2), 22)
 
-    note_top = grid_top - 25
+    note_top = grid_top - 28
     note_h = 14.0
     _draw_status_bar(pdf, item, x + pad, note_top, width - (pad * 2), note_h)
 
     preview_x = x + ((width - measurement.preview.width) / 2)
-    preview_top = note_top - note_h - 6
+    preview_top = note_top - note_h - 11
     _draw_contact_preview_triptych(pdf, measurement.preview, preview_x, preview_top)
 
 
@@ -294,29 +303,32 @@ def _draw_contact_metadata_grid(pdf: canvas.Canvas, clip: ClipInfo, x: float, y:
     cell_w = (width - (gap * 3)) / 4
     for index, (label, value) in enumerate(columns):
         cell_x = x + (index * (cell_w + gap))
-        pdf.setFillColor(colors.HexColor("#FBFAF7"))
-        pdf.setStrokeColor(colors.HexColor("#E6DED1"))
-        pdf.roundRect(cell_x, y - height, cell_w, height, 4, fill=1, stroke=1)
+        if index:
+            divider_x = cell_x - (gap / 2)
+            pdf.setStrokeColor(colors.HexColor("#D9DEE5"))
+            pdf.setLineWidth(0.7)
+            pdf.line(divider_x, y - height + 2, divider_x, y - 2)
         pdf.setFillColor(colors.HexColor("#6B717A"))
-        pdf.setFont("Helvetica-Bold", 5.9)
-        pdf.drawString(cell_x + 7, y - 8, label)
-        pdf.setFillColor(colors.HexColor("#1F2328"))
-        pdf.setFont("Helvetica-Bold", 7.2)
-        pdf.drawString(cell_x + 7, y - 17, _ellipsize_for_width(pdf, value, cell_w - 14))
+        pdf.setFont("Helvetica-Bold", 5.2)
+        pdf.drawString(cell_x + 5, y - 7, label)
+        pdf.setFillColor(colors.HexColor("#111820"))
+        pdf.setFont("Helvetica-Bold", 6.0)
+        pdf.drawString(cell_x + 5, y - 17, _ellipsize_for_width(pdf, value, cell_w - 10))
 
 
 def _draw_status_bar(pdf: canvas.Canvas, item: ReportItem, x: float, y: float, width: float, height: float) -> None:
     warningish = item.status in {ClipStatus.PARTIAL_SUCCESS, ClipStatus.METADATA_INCOMPLETE}
     ok = item.status is ClipStatus.SUCCESS and not item.warnings and not item.errors
-    fill = "#EAF5ED" if ok else "#FFF3E8" if warningish else "#FDECEC"
-    text_color = "#1E7A46" if ok else "#A35A00" if warningish else "#B42318"
+    fill = "#F0F7F4" if ok else "#FFF7EA" if warningish else "#FDECEC"
+    text_color = "#3C744F" if ok else "#A35A00" if warningish else "#B42318"
     pdf.setFillColor(colors.HexColor(fill))
-    pdf.setStrokeColor(colors.HexColor("#E0D8CA"))
-    pdf.roundRect(x, y - height, width, height, 4, fill=1, stroke=1)
+    pdf.setStrokeColor(colors.HexColor("#D8E6DE" if ok else "#E8D7BD" if warningish else "#E7C4C1"))
+    pdf.roundRect(x, y - height, width, height, 3, fill=1, stroke=1)
+    _draw_info_icon(pdf, x + 9, y - 9.2, text_color)
     pdf.setFillColor(colors.HexColor(text_color))
-    pdf.setFont("Helvetica-Bold", 7.1)
+    pdf.setFont("Helvetica", 6.4)
     note = _report_note_lines(item)[0]
-    pdf.drawString(x + 8, y - 10, _ellipsize_for_width(pdf, note, width - 16))
+    pdf.drawString(x + 20, y - 9.5, _ellipsize_for_width(pdf, note, width - 28))
 
 
 def _draw_contact_preview_triptych(
@@ -338,41 +350,46 @@ def _draw_contact_preview_block(
     y: float,
 ) -> None:
     caption_h = frame.caption_height
+    total_h = frame.total_height
     image_y = y - caption_h - frame.image_height
-    pdf.setFillColor(colors.HexColor("#1F2328"))
-    pdf.rect(x, y - caption_h, frame.image_width, caption_h, fill=1, stroke=0)
-    pdf.setFillColor(colors.white)
-    pdf.setFont("Helvetica-Bold", 7.8)
+    image_x = x + CONTACT_FRAME_INSET
+
+    pdf.setFillColor(colors.HexColor("#FCFCFD"))
+    pdf.setStrokeColor(colors.HexColor("#DDE2EA"))
+    pdf.roundRect(x, y - total_h, frame.card_width, total_h, 5, fill=1, stroke=1)
+
+    pdf.setFillColor(colors.HexColor("#111820"))
+    pdf.setFont("Helvetica-Bold", 6.6)
     pdf.drawString(x + 7, y - 15, frame.label)
-    pdf.setFont("Helvetica", 7.4)
+    pdf.setFont("Helvetica", 6.2)
     timecode = frame.capture.actual_timecode if frame.capture is not None and frame.capture.actual_timecode else "TC N/A"
-    pdf.drawRightString(x + frame.image_width - 7, y - 15, timecode)
+    pdf.drawRightString(x + frame.card_width - 7, y - 15, timecode)
 
     image_path = _display_image_path(frame.capture) if frame.capture is not None else None
     if image_path is not None and image_path.is_file():
         pdf.drawImage(
             _pdf_image_reader(image_path, frame.image_width, frame.image_height),
-            x,
+            image_x,
             image_y,
             frame.image_width,
             frame.image_height,
             preserveAspectRatio=False,
             mask="auto",
         )
-        pdf.setStrokeColor(colors.HexColor("#2E343B"))
-        pdf.setLineWidth(1)
-        pdf.rect(x, image_y, frame.image_width, frame.image_height, fill=0, stroke=1)
+        pdf.setStrokeColor(colors.HexColor("#C7CDD6"))
+        pdf.setLineWidth(0.8)
+        pdf.roundRect(image_x, image_y, frame.image_width, frame.image_height, 3, fill=0, stroke=1)
         return
 
-    pdf.setFillColor(colors.HexColor("#EEE7DC"))
-    pdf.rect(x, image_y, frame.image_width, frame.image_height, fill=1, stroke=0)
-    pdf.setStrokeColor(colors.HexColor("#B8AEA0"))
-    pdf.setLineWidth(1)
-    pdf.rect(x, image_y, frame.image_width, frame.image_height, fill=0, stroke=1)
-    pdf.setFillColor(colors.HexColor("#5F6670"))
+    pdf.setFillColor(colors.HexColor("#F8F6F2"))
+    pdf.setStrokeColor(colors.HexColor("#D8D2CA"))
+    pdf.setLineWidth(0.8)
+    pdf.roundRect(image_x, image_y, frame.image_width, frame.image_height, 3, fill=1, stroke=1)
+    _draw_missing_image_icon(pdf, image_x + (frame.image_width / 2), image_y + (frame.image_height / 2) + 8)
+    pdf.setFillColor(colors.HexColor("#8A8178"))
     pdf.setFont("Helvetica", 8.5)
     status = frame.capture.status.value if frame.capture is not None else "not captured"
-    pdf.drawCentredString(x + (frame.image_width / 2), image_y + (frame.image_height / 2), status)
+    pdf.drawCentredString(image_x + (frame.image_width / 2), image_y + (frame.image_height / 2) - 14, status)
 
 
 
@@ -811,7 +828,7 @@ def _image_aspect_ratio(path: Path | None, fallback: float = 16 / 9) -> float:
         width, height = image.size
     if width <= 0 or height <= 0:
         return fallback
-    return width / height
+    return float(width / height)
 
 
 def _measure_contact_frame(
@@ -822,15 +839,17 @@ def _measure_contact_frame(
     caption_height: float = CONTACT_FRAME_CAPTION_HEIGHT,
 ) -> ContactFrameMeasurement:
     aspect_ratio = _image_aspect_ratio(_display_image_path(capture))
-    image_height = column_width / aspect_ratio
+    image_width = max(24.0, column_width - (CONTACT_FRAME_INSET * 2))
+    image_height = image_width / aspect_ratio
     return ContactFrameMeasurement(
         label=label,
         capture=capture,
         x=x,
+        card_width=column_width,
         caption_height=caption_height,
-        image_width=column_width,
+        image_width=image_width,
         image_height=image_height,
-        total_height=caption_height + image_height,
+        total_height=caption_height + image_height + CONTACT_FRAME_INSET,
         aspect_ratio=aspect_ratio,
     )
 
@@ -846,8 +865,8 @@ def _measure_contact_preview(
     preview_width = min(available_width, CONTACT_PREVIEW_MAX_WIDTH)
     if max_height is not None:
         min_aspect = min(_image_aspect_ratio(_display_image_path(capture)) for capture, _label in captures)
-        max_image_height = max(36.0, max_height - CONTACT_FRAME_CAPTION_HEIGHT)
-        max_column_width = max_image_height * min_aspect
+        max_image_height = max(36.0, max_height - CONTACT_FRAME_CAPTION_HEIGHT - CONTACT_FRAME_INSET)
+        max_column_width = (max_image_height * min_aspect) + (CONTACT_FRAME_INSET * 2)
         preview_width = min(preview_width, (max_column_width * 3) + (CONTACT_PREVIEW_GAP * 2))
     column_width = (preview_width - (CONTACT_PREVIEW_GAP * 2)) / 3
     frames = tuple(
@@ -872,8 +891,8 @@ def _measure_contact_clip_card(
     width: float,
     max_height: float | None = None,
 ) -> ContactClipMeasurement:
-    chrome_height = 90.0
-    available_preview_width = width - 24.0
+    chrome_height = 103.0
+    available_preview_width = width - 34.0
     preview = _measure_contact_preview(item, available_preview_width)
     height = chrome_height + preview.height
     if max_height is not None and height > max_height:
@@ -970,10 +989,48 @@ def _middle_capture(
 
 def _status_color(status: ClipStatus) -> str:
     return {
-        ClipStatus.SUCCESS: "#1E7A46",
+        ClipStatus.SUCCESS: "#3D8652",
         ClipStatus.PARTIAL_SUCCESS: "#A35A00",
         ClipStatus.METADATA_INCOMPLETE: "#A35A00",
     }.get(status, "#B42318")
+
+
+def _draw_header_mark(pdf: canvas.Canvas, x: float, y: float) -> None:
+    shades = ("#363D44", "#2F363D", "#293039", "#232A32", "#1D242B")
+    for index, shade in enumerate(shades):
+        pdf.setFillColor(colors.HexColor(shade))
+        pdf.rect(x + (index * 17), y - 10, 13, 13, fill=1, stroke=0)
+
+
+def _draw_file_icon(pdf: canvas.Canvas, x: float, y: float) -> None:
+    pdf.setStrokeColor(colors.HexColor("#111820"))
+    pdf.setLineWidth(0.9)
+    pdf.rect(x, y - 12, 10, 14, fill=0, stroke=1)
+    pdf.line(x + 7, y + 2, x + 10, y - 1)
+    pdf.line(x + 7, y + 2, x + 7, y - 1)
+
+
+def _draw_info_icon(pdf: canvas.Canvas, x: float, y: float, color: str) -> None:
+    pdf.setStrokeColor(colors.HexColor(color))
+    pdf.setLineWidth(0.8)
+    pdf.circle(x, y, 3.8, stroke=1, fill=0)
+    pdf.setFillColor(colors.HexColor(color))
+    pdf.setFont("Helvetica-Bold", 5.8)
+    pdf.drawCentredString(x, y - 2.2, "i")
+
+
+def _draw_missing_image_icon(pdf: canvas.Canvas, center_x: float, center_y: float) -> None:
+    width = 28.0
+    height = 22.0
+    x = center_x - (width / 2)
+    y = center_y - (height / 2)
+    pdf.setStrokeColor(colors.HexColor("#B9B2AA"))
+    pdf.setLineWidth(1.2)
+    pdf.roundRect(x, y, width, height, 3, fill=0, stroke=1)
+    pdf.circle(x + 20, y + 15, 2.2, stroke=1, fill=0)
+    pdf.line(x + 4, y + 5, x + 11, y + 12)
+    pdf.line(x + 11, y + 12, x + 16, y + 8)
+    pdf.line(x + 16, y + 8, x + 24, y + 16)
 
 
 def _draw_pill(
