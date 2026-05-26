@@ -1,0 +1,312 @@
+무선 카메라 제어 및 현장 스크립트...
+
+6 CLIPS
+
+5 SUCCESS
+
+1 WARNINGS
+
+CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL
+
+Source: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하...
+
+Generated 2026-05-19 00:29 - Layout B / contact_sheet
+
+Page 1 of 4 - Middle preview: 1 of 0
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_1_A-CAM_take-2026_05_18_FINAL_v0...
+TIMECODE
+
+SUCCESS
+
+01:00:00:00 -> 01:00:01:23
+
+FORMAT
+
+DECODER
+
+RESOLUTION
+
+RATE / DURATION
+
+standard
+
+prores
+
+1920x1080
+
+24.000fps / 2.000s
+
+No clip-level warnings or errors.
+
+START
+
+01:00:00:00
+
+MIDDLE
+
+TC N/A
+
+END
+
+01:00:01:23
+
+not captured
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_2_A-CAM_take-2026_05_18_FINAL_v...
+TIMECODE
+
+PARTIAL_SUCCESS
+
+01:00:00:00 -> 01:00:01:23
+
+FORMAT
+
+DECODER
+
+RESOLUTION
+
+RATE / DURATION
+
+standard
+
+prores
+
+1920x1080
+
+24.000fps / 2.000s
+
+Warning: 촬영감독과 스크립터가 동시에 확인해야 하는 상태값 확인 필요
+
+START
+
+01:00:00:00
+
+preview unavailable
+
+MIDDLE
+
+TC N/A
+
+END
+
+01:00:01:23
+
+not captured
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: contact.pdf
+
+Page 1
+
+무선 카메라 제어 및 현장 스크립트...
+
+6 CLIPS
+
+5 SUCCESS
+
+1 WARNINGS
+
+CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL
+
+Source: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하...
+
+Generated 2026-05-19 00:29 - Layout B / contact_sheet
+
+Page 2 of 4 - Middle preview: 1 of 0
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_3_A-CAM_take-2026_05_18_FINAL_v0...
+TIMECODE
+
+SUCCESS
+
+01:00:00:00 -> 01:00:01:23
+
+FORMAT
+
+DECODER
+
+RESOLUTION
+
+RATE / DURATION
+
+standard
+
+unknown
+
+1920x1080
+
+24.000fps / 2.000s
+
+No clip-level warnings or errors.
+
+START
+
+01:00:00:00
+
+MIDDLE
+
+TC N/A
+
+END
+
+01:00:01:23
+
+not captured
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_4_A-CAM_take-2026_05_18_FINAL_v0...
+TIMECODE
+
+SUCCESS
+
+01:00:00:00 -> 01:00:01:23
+
+FORMAT
+
+DECODER
+
+RESOLUTION
+
+RATE / DURATION
+
+standard
+
+prores
+
+1920x1080
+
+24.000fps / 2.000s
+
+No clip-level warnings or errors.
+
+START
+
+01:00:00:00
+
+MIDDLE
+
+TC N/A
+
+END
+
+01:00:01:23
+
+not captured
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: contact.pdf
+
+Page 2
+
+무선 카메라 제어 및 현장 스크립트...
+
+6 CLIPS
+
+5 SUCCESS
+
+1 WARNINGS
+
+CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL
+
+Source: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하...
+
+Generated 2026-05-19 00:29 - Layout B / contact_sheet
+
+Page 3 of 4 - Middle preview: 1 of 0
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_5_A-CAM_take-2026_05_18_FINAL_v0...
+TIMECODE
+
+SUCCESS
+
+01:00:00:00 -> 01:00:01:23
+
+FORMAT
+
+DECODER
+
+RESOLUTION
+
+RATE / DURATION
+
+standard
+
+prores
+
+1920x1080
+
+24.000fps / 2.000s
+
+No clip-level warnings or errors.
+
+START
+
+01:00:00:00
+
+MIDDLE
+
+TC N/A
+
+END
+
+01:00:01:23
+
+not captured
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_6_A-CAM_take-2026_05_18_FINAL_v0...
+TIMECODE
+
+SUCCESS
+
+01:00:00:00 -> 01:00:01:23
+
+FORMAT
+
+DECODER
+
+RESOLUTION
+
+RATE / DURATION
+
+standard
+
+prores
+
+1920x1080
+
+24.000fps / 2.000s
+
+No clip-level warnings or errors.
+
+START
+
+01:00:00:00
+
+MIDDLE
+
+TC N/A
+
+END
+
+01:00:01:23
+
+not captured
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: contact.pdf
+
+Page 3
+
+Failed / Partial Clips
+Failures, partial clips, and skipped clips remain visible for operator review.
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_2_A-CAM_take-2026_05_18_FINAL_v003.mov [partial_success]
+Source: clip-2.mov
+Warning: 촬영감독과 스크립터가 동시에 확인해야 하는 상태값 확인 필요
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: contact.pdf
+
+Page 4
+
+

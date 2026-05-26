@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
         self._progress_table.setShowGrid(False)
         self._progress_table.setAlternatingRowColors(False)
         self._progress_table.setWordWrap(True)
-        self._progress_table.setMinimumHeight(108)
+        self._progress_table.setMinimumHeight(100)
         header = self._progress_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)

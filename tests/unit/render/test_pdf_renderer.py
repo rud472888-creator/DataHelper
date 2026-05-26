@@ -260,6 +260,75 @@ def test_render_pdf_contact_sheet_failed_section_shows_full_path_when_requested(
     assert "Error: ffmpeg missing" in text
 
 
+def test_render_pdf_contact_sheet_handles_korean_pressure_fixture_and_corrupt_image(tmp_path: Path) -> None:
+    corrupt_png = tmp_path / "corrupt.png"
+    corrupt_png.write_bytes(b"not an image")
+    item = ReportItem(
+        clip=make_clip(
+            clip_name="무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서.mov",
+            source_path="/Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는 상태값/A-CAM_take-2026_05_18_FINAL_v003.mov",
+            codec=None,
+            metadata_raw={
+                "identifier": "A-CAM_take-2026_05_18_FINAL_v003",
+                "검증률": "98.7%",
+                "처리 시간": "2.3초",
+                "row_count": "47,200건",
+                "review_url": "https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_FINAL_v003",
+                "missing_note": "-",
+            },
+        ),
+        captures=(
+            CapturePoint(
+                label="Start",
+                requested_ratio=0.0,
+                requested_frame_index=0,
+                requested_seconds=0.0,
+                actual_frame_index=0,
+                actual_seconds=0.0,
+                actual_timecode="01:00:00:00",
+                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
+                image_path_temp=str(corrupt_png),
+                status=CaptureStatus.SUCCESS,
+            ),
+            CapturePoint(
+                label="End",
+                requested_ratio=1.0,
+                requested_frame_index=47,
+                requested_seconds=1.958,
+                actual_frame_index=47,
+                actual_seconds=1.958,
+                actual_timecode="01:00:01:23",
+                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
+                status=CaptureStatus.SUCCESS,
+            ),
+        ),
+        status=ClipStatus.SUCCESS,
+        adapter_name="ffmpeg",
+        warnings=("촬영감독과 스크립터가 동시에 확인해야 하는 상태값 확인 필요",),
+    )
+    settings = AppSettings.from_mapping(
+        {
+            "input": {"paths": ["/Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는 상태값"]},
+            "capture": {"middle_count": 0},
+            "report": {
+                "layout": "contact_sheet",
+                "path_display": "basename",
+                "project_name": "무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서",
+            },
+            "output": {"pdf_path": str(tmp_path / "korean-pressure.pdf")},
+        }
+    )
+    pdf_path = tmp_path / "korean-pressure.pdf"
+
+    render_pdf(pdf_path, settings, (item,), make_summary())
+
+    data = pdf_path.read_bytes()
+    assert data.startswith(b"%PDF")
+    assert b"AppleGothic" in data or b"HYGothic-Medium" in data
+    assert pdf_page_count(pdf_path) == 1
+    assert "preview unavailable" in pdf_text(pdf_path)
+
+
 def test_contact_sheet_renders_start_middle_end_preview_labels(tmp_path: Path) -> None:
     start_png = tmp_path / "start.png"
     mid1_png = tmp_path / "mid1.png"

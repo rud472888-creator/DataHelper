@@ -26,6 +26,7 @@ from frameproof.core.models import (
 )
 
 STANDARD_FAMILY: tuple[str, ...] = ("standard",)
+COLOR_METADATA_REPAIR_FILTER = "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709"
 
 
 @dataclass(frozen=True)
@@ -150,16 +151,46 @@ class FFmpegAdapter:
                 by_label[failed.label] = failed
                 continue
             except subprocess.CalledProcessError as exc:
-                failed = _decode_failed_result(
-                    request,
-                    error=AdapterError(
-                        code=AdapterErrorCode.DECODE_FAILED,
-                        message=exc.stderr.strip() or "ffmpeg capture failed",
-                    ),
-                )
-                results.append(failed)
-                by_label[failed.label] = failed
-                continue
+                if _is_swscale_color_metadata_failure(exc.stderr):
+                    repaired_command = _build_capture_command(
+                        ffmpeg.resolved_path,
+                        candidate.source_path,
+                        request,
+                        output_path,
+                        repair_color_metadata=True,
+                    )
+                    try:
+                        subprocess.run(repaired_command, capture_output=True, text=True, check=True, timeout=60)
+                    except subprocess.TimeoutExpired:
+                        failed = _decode_failed_result(
+                            request,
+                            error=AdapterError(code=AdapterErrorCode.TIMEOUT, message="ffmpeg capture timed out"),
+                        )
+                        results.append(failed)
+                        by_label[failed.label] = failed
+                        continue
+                    except subprocess.CalledProcessError as retry_exc:
+                        failed = _decode_failed_result(
+                            request,
+                            error=AdapterError(
+                                code=AdapterErrorCode.DECODE_FAILED,
+                                message=retry_exc.stderr.strip() or exc.stderr.strip() or "ffmpeg capture failed",
+                            ),
+                        )
+                        results.append(failed)
+                        by_label[failed.label] = failed
+                        continue
+                else:
+                    failed = _decode_failed_result(
+                        request,
+                        error=AdapterError(
+                            code=AdapterErrorCode.DECODE_FAILED,
+                            message=exc.stderr.strip() or "ffmpeg capture failed",
+                        ),
+                    )
+                    results.append(failed)
+                    by_label[failed.label] = failed
+                    continue
 
             if not output_path.is_file():
                 failed = _decode_failed_result(
@@ -249,6 +280,8 @@ def _build_capture_command(
     source_path: str,
     request: CaptureRequest,
     output_path: Path,
+    *,
+    repair_color_metadata: bool = False,
 ) -> list[str]:
     command = [ffmpeg_path, "-y", "-v", "error"]
     if request.requested_seconds is not None:
@@ -261,7 +294,7 @@ def _build_capture_command(
                 "-frames:v",
                 "1",
                 "-vf",
-                "scale=min(960\\,iw):-2",
+                _build_scale_filter(repair_color_metadata=repair_color_metadata),
                 str(output_path),
             ]
         )
@@ -273,7 +306,7 @@ def _build_capture_command(
             "-i",
             source_path,
             "-vf",
-            f"select=eq(n\\,{request.requested_frame_index}),scale=min(960\\,iw):-2",
+            _build_frame_filter(request.requested_frame_index, repair_color_metadata=repair_color_metadata),
             "-frames:v",
             "1",
             "-fps_mode",
@@ -282,6 +315,24 @@ def _build_capture_command(
         ]
     )
     return command
+
+
+def _build_frame_filter(frame_index: int, *, repair_color_metadata: bool) -> str:
+    return ",".join((f"select=eq(n\\,{frame_index})", _build_scale_filter(repair_color_metadata=repair_color_metadata)))
+
+
+def _build_scale_filter(*, repair_color_metadata: bool) -> str:
+    filters = ["scale=min(960\\,iw):-2"]
+    if repair_color_metadata:
+        filters.insert(0, COLOR_METADATA_REPAIR_FILTER)
+        filters.append("format=rgb24")
+    return ",".join(filters)
+
+
+def _is_swscale_color_metadata_failure(stderr: str | None) -> bool:
+    if stderr is None:
+        return False
+    return "Unsupported input (Operation not supported)" in stderr and "swscaler" in stderr
 
 
 def _decode_failed_result(request: CaptureRequest, *, error: AdapterError) -> CaptureResult:

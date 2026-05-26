@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from frameproof.adapters.ffmpeg_adapter import FFmpegAdapter
+from frameproof.adapters.ffmpeg_adapter import CaptureContext, FFmpegAdapter
 from frameproof.config.settings import AdapterSettings
 from frameproof.core.dependency_inspector import AdapterAvailability, DependencyRecord
 from frameproof.core.models import (
@@ -118,3 +119,58 @@ def test_probe_builds_clip_info_from_ffprobe_payload(monkeypatch: pytest.MonkeyP
     assert result.clip.codec == "h264"
     assert result.clip.frame_count == 48
     assert result.clip.width == 1280
+
+
+def test_capture_retries_with_color_metadata_repair_for_mov_swscale_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FFmpegAdapter(AdapterSettings())
+    dependency = DependencyRecord(
+        name="ffmpeg",
+        state=AdapterDependencyState.AVAILABLE,
+        configured_path="ffmpeg",
+        resolved_path="/usr/bin/ffmpeg",
+    )
+    plan = CapturePlan(
+        clip_id="candidate-0001",
+        requests=(
+            CaptureRequest(label="Start", requested_ratio=0.0, requested_frame_index=0),
+            CaptureRequest(label="End", requested_ratio=1.0, requested_frame_index=23),
+        ),
+        middle_count=0,
+        used_frame_count=True,
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, text, check, timeout
+        commands.append(command)
+        if len(commands) == 1:
+            raise subprocess.CalledProcessError(
+                returncode=211,
+                cmd=command,
+                stderr="[swscaler] Unsupported input (Operation not supported): fmt:yuv422p10le",
+            )
+        Path(command[-1]).write_bytes(b"png")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(adapter._inspector, "ffmpeg", lambda: dependency)
+    monkeypatch.setattr(adapter, "_capture_context", lambda _candidate: CaptureContext(fps_num=24, fps_den=1))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    results = adapter.capture(make_candidate(), plan, profile=CaptureProfile(name="preview"), staging_dir=tmp_path)
+
+    assert [result.status for result in results] == [CaptureStatus.SUCCESS, CaptureStatus.SUCCESS]
+    assert len(commands) == 3
+    assert any(
+        "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709" in arg
+        for arg in commands[1]
+    )

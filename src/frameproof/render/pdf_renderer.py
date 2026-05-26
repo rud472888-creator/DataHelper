@@ -11,10 +11,13 @@ from PIL import Image, ImageOps
 from reportlab.lib import colors  # type: ignore[import-untyped]
 from reportlab.lib.pagesizes import A4, landscape, letter  # type: ignore[import-untyped]
 from reportlab.lib.utils import ImageReader  # type: ignore[import-untyped]
+from reportlab.pdfbase import pdfmetrics  # type: ignore[import-untyped]
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont  # type: ignore[import-untyped]
+from reportlab.pdfbase.ttfonts import TTFont  # type: ignore[import-untyped]
 from reportlab.pdfgen import canvas  # type: ignore[import-untyped]
 
 from frameproof.config.settings import AppSettings, PathDisplayMode, ReportLayout
-from frameproof.core.models import BatchSummary, CapturePoint, ClipInfo, ClipStatus, ReportItem
+from frameproof.core.models import BatchSummary, CapturePoint, CaptureStatus, ClipInfo, ClipStatus, ReportItem
 
 CONTACT_SHEET_PAGE_SIZE = A4
 DETAIL_PAGE_SIZE = landscape(letter)
@@ -30,6 +33,13 @@ CONTACT_FRAME_CAPTION_HEIGHT = 26.0
 CONTACT_FRAME_INSET = 12.0
 PDF_IMAGE_MAX_PIXELS = 1600
 PDF_IMAGE_QUALITY = 86
+KOREAN_FONT_NAME = "FrameProofKorean"
+KOREAN_CID_FONT_NAME = "HYGothic-Medium"
+KOREAN_FONT_PATHS = (
+    Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
+    Path("/Library/Fonts/NotoSansCJKkr-Regular.otf"),
+    Path("/Library/Fonts/NotoSansKR-Regular.ttf"),
+)
 
 
 @dataclass(frozen=True)
@@ -213,11 +223,10 @@ def _draw_contact_sheet_header(
     left_x = card_x + 18
     right_edge = card_x + card_w - 18
     right_col_w = 238.0
-    _draw_header_mark(pdf, left_x, top - 21)
-    title_x = left_x + 94
+    title_x = left_x
     pdf.setFillColor(colors.HexColor("#111820"))
     pdf.setFont("Helvetica-Bold", 15.5)
-    pdf.drawString(title_x, top - 22, _ellipsize_for_width(pdf, project_name, right_edge - right_col_w - title_x - 8))
+    _draw_string(pdf, title_x, top - 22, _ellipsize_for_width(pdf, project_name, right_edge - right_col_w - title_x - 8))
     pdf.setFillColor(colors.HexColor("#69717D"))
     pdf.setFont("Helvetica-Bold", 7.6)
     pdf.drawString(left_x, top - 45, "CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL")
@@ -242,7 +251,7 @@ def _draw_contact_sheet_header(
     pdf.setFillColor(colors.HexColor("#5F6670"))
     pdf.setFont("Helvetica", 7.3)
     right_text_x = right_edge - right_col_w
-    pdf.drawString(right_text_x, top - 48, f"Source: {_ellipsize_for_width(pdf, input_summary, right_col_w)}")
+    _draw_string(pdf, right_text_x, top - 48, f"Source: {_ellipsize_for_width(pdf, input_summary, right_col_w)}")
     pdf.drawString(right_text_x, top - 62, f"Page {page_number} of {total_pages}  -  Middle preview: 1 of {settings.capture.middle_count}")
 
 
@@ -265,16 +274,15 @@ def _draw_clip_block(
     badge_w = max(64.0, pdf.stringWidth(item.status.value.upper(), "Helvetica-Bold", 6.3) + 14)
     _draw_pill(pdf, x + width - pad - badge_w, y - 21, badge_w, 14, item.status.value.upper(), status_fill, "#FFFFFF", font_size=6.3)
 
-    _draw_file_icon(pdf, x + pad, y - 12)
     pdf.setFillColor(colors.HexColor("#111820"))
     pdf.setFont("Helvetica-Bold", 9.7)
-    pdf.drawString(x + pad + 15, y - 16, _ellipsize_for_width(pdf, item.clip.clip_name, width - (pad * 3) - badge_w - 15))
+    _draw_string(pdf, x + pad, y - 16, _ellipsize_for_width(pdf, item.clip.clip_name, width - (pad * 3) - badge_w))
     pdf.setFillColor(colors.HexColor("#4D5561"))
     pdf.setFont("Helvetica", 6.7)
     pdf.drawString(x + pad, y - 29, "TIMECODE")
     pdf.setFillColor(colors.HexColor("#111820"))
     pdf.setFont("Helvetica", 6.7)
-    pdf.drawString(x + pad + 43, y - 29, _ellipsize_for_width(pdf, _timecode_line(item).replace("Timecode: ", ""), width - (pad * 3) - badge_w - 43))
+    _draw_string(pdf, x + pad + 43, y - 29, _ellipsize_for_width(pdf, _timecode_line(item).replace("Timecode: ", ""), width - (pad * 3) - badge_w - 43))
 
     pdf.setStrokeColor(colors.HexColor("#D9DEE5"))
     pdf.setLineWidth(0.7)
@@ -313,7 +321,7 @@ def _draw_contact_metadata_grid(pdf: canvas.Canvas, clip: ClipInfo, x: float, y:
         pdf.drawString(cell_x + 5, y - 7, label)
         pdf.setFillColor(colors.HexColor("#111820"))
         pdf.setFont("Helvetica-Bold", 6.0)
-        pdf.drawString(cell_x + 5, y - 17, _ellipsize_for_width(pdf, value, cell_w - 10))
+        _draw_string(pdf, cell_x + 5, y - 17, _ellipsize_for_width(pdf, value, cell_w - 10))
 
 
 def _draw_status_bar(pdf: canvas.Canvas, item: ReportItem, x: float, y: float, width: float, height: float) -> None:
@@ -324,11 +332,10 @@ def _draw_status_bar(pdf: canvas.Canvas, item: ReportItem, x: float, y: float, w
     pdf.setFillColor(colors.HexColor(fill))
     pdf.setStrokeColor(colors.HexColor("#D8E6DE" if ok else "#E8D7BD" if warningish else "#E7C4C1"))
     pdf.roundRect(x, y - height, width, height, 3, fill=1, stroke=1)
-    _draw_info_icon(pdf, x + 9, y - 9.2, text_color)
     pdf.setFillColor(colors.HexColor(text_color))
     pdf.setFont("Helvetica", 6.4)
     note = _report_note_lines(item)[0]
-    pdf.drawString(x + 20, y - 9.5, _ellipsize_for_width(pdf, note, width - 28))
+    _draw_string(pdf, x + 9, y - 9.5, _ellipsize_for_width(pdf, note, width - 18))
 
 
 def _draw_contact_preview_triptych(
@@ -360,36 +367,41 @@ def _draw_contact_preview_block(
 
     pdf.setFillColor(colors.HexColor("#111820"))
     pdf.setFont("Helvetica-Bold", 6.6)
-    pdf.drawString(x + 7, y - 15, frame.label)
+    _draw_string(pdf, x + 7, y - 15, frame.label)
     pdf.setFont("Helvetica", 6.2)
     timecode = frame.capture.actual_timecode if frame.capture is not None and frame.capture.actual_timecode else "TC N/A"
-    pdf.drawRightString(x + frame.card_width - 7, y - 15, timecode)
+    _draw_right_string(pdf, x + frame.card_width - 7, y - 15, timecode)
 
     image_path = _display_image_path(frame.capture) if frame.capture is not None else None
     if image_path is not None and image_path.is_file():
-        pdf.drawImage(
-            _pdf_image_reader(image_path, frame.image_width, frame.image_height),
-            image_x,
-            image_y,
-            frame.image_width,
-            frame.image_height,
-            preserveAspectRatio=False,
-            mask="auto",
-        )
-        pdf.setStrokeColor(colors.HexColor("#C7CDD6"))
-        pdf.setLineWidth(0.8)
-        pdf.roundRect(image_x, image_y, frame.image_width, frame.image_height, 3, fill=0, stroke=1)
-        return
+        image_reader = _pdf_image_reader(image_path, frame.image_width, frame.image_height)
+        if image_reader is not None:
+            pdf.drawImage(
+                image_reader,
+                image_x,
+                image_y,
+                frame.image_width,
+                frame.image_height,
+                preserveAspectRatio=False,
+                mask="auto",
+            )
+            pdf.setStrokeColor(colors.HexColor("#C7CDD6"))
+            pdf.setLineWidth(0.8)
+            pdf.roundRect(image_x, image_y, frame.image_width, frame.image_height, 3, fill=0, stroke=1)
+            return
 
     pdf.setFillColor(colors.HexColor("#F8F6F2"))
     pdf.setStrokeColor(colors.HexColor("#D8D2CA"))
     pdf.setLineWidth(0.8)
     pdf.roundRect(image_x, image_y, frame.image_width, frame.image_height, 3, fill=1, stroke=1)
-    _draw_missing_image_icon(pdf, image_x + (frame.image_width / 2), image_y + (frame.image_height / 2) + 8)
     pdf.setFillColor(colors.HexColor("#8A8178"))
     pdf.setFont("Helvetica", 8.5)
-    status = frame.capture.status.value if frame.capture is not None else "not captured"
-    pdf.drawCentredString(image_x + (frame.image_width / 2), image_y + (frame.image_height / 2) - 14, status)
+    _draw_centred_string(
+        pdf,
+        image_x + (frame.image_width / 2),
+        image_y + (frame.image_height / 2) - 3,
+        _preview_placeholder_text(frame.capture, image_path),
+    )
 
 
 
@@ -404,30 +416,38 @@ def _draw_detail_page(
     page_number: int,
 ) -> None:
     page_width, page_height = DETAIL_PAGE_SIZE
-    pdf.setFillColor(colors.HexColor("#F3F1EA"))
+    pdf.setFillColor(colors.HexColor("#F4F6F8"))
     pdf.rect(0, 0, page_width, page_height, fill=1, stroke=0)
     pdf.setFillColor(colors.HexColor("#1F2328"))
 
     top = page_height - MARGIN
-    pdf.setFont("Times-Bold", 16)
-    pdf.drawString(MARGIN, top - 10, item.clip.clip_name)
+    pdf.setFont("Helvetica-Bold", 16)
+    _draw_string(pdf, MARGIN, top - 10, _ellipsize_for_width(pdf, item.clip.clip_name, page_width - (MARGIN * 2)))
     pdf.setFont("Helvetica-Bold", 10)
     pdf.drawString(MARGIN, top - 26, "Layout A / detail")
     pdf.setFont("Helvetica", 9.5)
     pdf.setFillColor(colors.HexColor("#5D6470"))
-    pdf.drawString(MARGIN, top - 40, f"Project: {project_name}")
+    _draw_string(pdf, MARGIN, top - 40, _ellipsize_for_width(pdf, f"Project: {project_name}", 168))
     pdf.drawString(MARGIN + 180, top - 40, f"Generated: {generated_at}")
-    pdf.drawString(MARGIN + 360, top - 40, f"Input summary: {input_summary}")
-    pdf.drawString(
+    _draw_string(pdf, MARGIN + 360, top - 40, _ellipsize_for_width(pdf, f"Input summary: {input_summary}", page_width - MARGIN - (MARGIN + 360)))
+    _draw_string(
+        pdf,
         MARGIN,
         top - 54,
-        (
+        _ellipsize_for_width(
+            pdf,
             "Counts snapshot: "
             f"total={summary.total_clips} success={summary.success_count} "
-            f"partial={summary.partial_success_count} failed={summary.probe_failed_count + summary.decode_failed_count}"
+            f"partial={summary.partial_success_count} failed={summary.probe_failed_count + summary.decode_failed_count}",
+            page_width - (MARGIN * 2),
         ),
     )
-    pdf.drawString(MARGIN, top - 68, f"Source path: {_display_path(item.clip.source_path, settings.report.path_display)}")
+    _draw_string(
+        pdf,
+        MARGIN,
+        top - 68,
+        _ellipsize_for_width(pdf, f"Source path: {_display_path(item.clip.source_path, settings.report.path_display)}", page_width - (MARGIN * 2)),
+    )
 
     left_x = MARGIN
     content_top = top - 84
@@ -484,7 +504,7 @@ def _draw_capture_card(
 
     pdf.setFillColor(colors.HexColor("#1F2328"))
     pdf.setFont("Helvetica-Bold", 10)
-    pdf.drawString(x + 12, y - 18, capture.label)
+    _draw_string(pdf, x + 12, y - 18, capture.label)
     pdf.setFillColor(colors.HexColor("#5D6470"))
     pdf.setFont("Helvetica", 8.5)
     pdf.drawString(x + 12, y - 32, f"Requested ratio: {_ratio_display(capture.requested_ratio)}")
@@ -493,28 +513,32 @@ def _draw_capture_card(
     pdf.drawString(x + 12, y - 68, f"Actual frame: {_actual_frame_display(capture)}")
     pdf.drawString(x + 12, y - 80, f"Actual time: {_actual_seconds_display(capture)}")
     pdf.setFont("Helvetica-Bold", 8.5)
-    pdf.drawString(x + 12, y - 92, f"Actual timecode: {capture.actual_timecode or 'N/A'}")
+    _draw_string(pdf, x + 12, y - 92, _ellipsize_for_width(pdf, f"Actual timecode: {capture.actual_timecode or 'N/A'}", width - 24))
 
     image_top = y - 102
     image_height = 44.0
     image_width = width - 24
     image_path = _display_image_path(capture)
+    image_drawn = False
     if image_path is not None and image_path.is_file():
         draw_width, draw_height = _fit_image(image_path, image_width, image_height)
         image_x = x + 12 + ((image_width - draw_width) / 2)
         image_y = image_top - draw_height
-        pdf.drawImage(_pdf_image_reader(image_path, image_width, image_height), image_x, image_y, draw_width, draw_height, preserveAspectRatio=True, mask="auto")
-    else:
+        image_reader = _pdf_image_reader(image_path, image_width, image_height)
+        if image_reader is not None:
+            pdf.drawImage(image_reader, image_x, image_y, draw_width, draw_height, preserveAspectRatio=True, mask="auto")
+            image_drawn = True
+    if not image_drawn:
         pdf.setFillColor(colors.HexColor("#EEE7DC"))
         pdf.roundRect(x + 12, image_top - image_height, image_width, image_height, 6, fill=1, stroke=0)
         pdf.setFillColor(colors.HexColor("#5D6470"))
         pdf.setFont("Helvetica", 8)
-        pdf.drawCentredString(x + (width / 2), image_top - 20, capture.status.value)
+        _draw_centred_string(pdf, x + (width / 2), image_top - 20, _preview_placeholder_text(capture, image_path))
 
     pdf.setFillColor(colors.HexColor("#A35A00" if capture.warnings else "#5D6470"))
     pdf.setFont("Helvetica", 8)
     note = _capture_note(capture)
-    pdf.drawString(x + 12, bottom + 10, note)
+    _draw_string(pdf, x + 12, bottom + 10, _ellipsize_for_width(pdf, note, width - 24))
 
 
 def _draw_detail_notes(
@@ -589,7 +613,7 @@ def _draw_thumbnails(
         pdf.roundRect(x, y - height, width, height, 8, fill=1, stroke=0)
         pdf.setFillColor(colors.HexColor("#5D6470"))
         pdf.setFont("Helvetica", 9)
-        pdf.drawCentredString(x + (width / 2), y - (height / 2), "No thumbnails captured")
+        _draw_centred_string(pdf, x + (width / 2), y - (height / 2), "No thumbnails captured")
         return
 
     gap = 8.0
@@ -614,30 +638,34 @@ def _draw_single_thumbnail(
 
     pdf.setFillColor(colors.HexColor("#1F2328"))
     pdf.setFont("Helvetica-Bold", 8.5)
-    pdf.drawString(x + 8, y - 12, capture.label)
+    _draw_string(pdf, x + 8, y - 12, capture.label)
     pdf.setFillColor(colors.HexColor("#5D6470"))
     pdf.setFont("Helvetica", 7.8)
-    pdf.drawString(x + 8, y - 24, capture.actual_timecode or "Timecode: N/A")
+    _draw_string(pdf, x + 8, y - 24, _ellipsize_for_width(pdf, capture.actual_timecode or "Timecode: N/A", width - 16))
 
     image_height = max(height - 44, 24)
     image_top = y - 30
     image_path = _display_image_path(capture)
+    image_drawn = False
     if image_path is not None and image_path.is_file():
         draw_width, draw_height = _fit_image(image_path, width - 12, image_height)
         image_x = x + ((width - draw_width) / 2)
         image_y = image_top - draw_height
-        pdf.drawImage(_pdf_image_reader(image_path, width - 12, image_height), image_x, image_y, draw_width, draw_height, preserveAspectRatio=True, mask="auto")
-    else:
+        image_reader = _pdf_image_reader(image_path, width - 12, image_height)
+        if image_reader is not None:
+            pdf.drawImage(image_reader, image_x, image_y, draw_width, draw_height, preserveAspectRatio=True, mask="auto")
+            image_drawn = True
+    if not image_drawn:
         pdf.setFillColor(colors.HexColor("#EEE7DC"))
         pdf.roundRect(x + 6, bottom + 18, width - 12, image_height, 6, fill=1, stroke=0)
         pdf.setFillColor(colors.HexColor("#5D6470"))
         pdf.setFont("Helvetica", 8)
-        pdf.drawCentredString(x + (width / 2), bottom + 18 + (image_height / 2), capture.status.value)
+        _draw_centred_string(pdf, x + (width / 2), bottom + 18 + (image_height / 2), _preview_placeholder_text(capture, image_path))
 
     pdf.setFillColor(colors.HexColor("#5D6470"))
     pdf.setFont("Helvetica", 7.5)
     note = _capture_note(capture)
-    pdf.drawString(x + 8, bottom + 8, note[:38])
+    _draw_string(pdf, x + 8, bottom + 8, _ellipsize_for_width(pdf, note, width - 16))
 
 
 def _draw_failed_section(
@@ -649,10 +677,10 @@ def _draw_failed_section(
     path_display: PathDisplayMode,
 ) -> None:
     page_width, page_height = page_size
-    pdf.setFillColor(colors.HexColor("#F3F1EA"))
+    pdf.setFillColor(colors.HexColor("#F4F6F8"))
     pdf.rect(0, 0, page_width, page_height, fill=1, stroke=0)
     pdf.setFillColor(colors.HexColor("#1F2328"))
-    pdf.setFont("Times-Bold", 15)
+    pdf.setFont("Helvetica-Bold", 15)
     pdf.drawString(MARGIN, page_height - MARGIN - 6, "Failed / Partial Clips")
     pdf.setFont("Helvetica", 10)
     pdf.setFillColor(colors.HexColor("#5D6470"))
@@ -666,10 +694,10 @@ def _draw_failed_section(
         if cursor_y - box_height < MARGIN + FOOTER_HEIGHT:
             _draw_footer(pdf, report_filename, regular_pages + 1, page_size)
             pdf.showPage()
-            pdf.setFillColor(colors.HexColor("#F3F1EA"))
+            pdf.setFillColor(colors.HexColor("#F4F6F8"))
             pdf.rect(0, 0, page_width, page_height, fill=1, stroke=0)
             pdf.setFillColor(colors.HexColor("#1F2328"))
-            pdf.setFont("Times-Bold", 15)
+            pdf.setFont("Helvetica-Bold", 15)
             pdf.drawString(MARGIN, page_height - MARGIN - 6, "Failed / Partial Clips")
             cursor_y = page_height - MARGIN - FAILED_SECTION_TOP
 
@@ -680,7 +708,7 @@ def _draw_failed_section(
         pdf.setFillColor(colors.HexColor("#1F2328"))
         pdf.setFont("Helvetica-Bold", 9)
         line_y = cursor_y - 16
-        pdf.drawString(MARGIN + 12, line_y, lines[0])
+        _draw_string(pdf, MARGIN + 12, line_y, _ellipsize_for_width(pdf, lines[0], page_width - (MARGIN * 2) - 24))
         pdf.setFillColor(colors.HexColor("#5D6470"))
         pdf.setFont("Helvetica", 8.5)
         for line in lines[1:]:
@@ -701,9 +729,9 @@ def _draw_footer(
     pdf.line(MARGIN, MARGIN + 8, page_width - MARGIN, MARGIN + 8)
     pdf.setFillColor(colors.HexColor("#5D6470"))
     pdf.setFont("Helvetica", 8)
-    pdf.drawString(MARGIN, MARGIN - 2, _ellipsize_for_width(pdf, f"Report file: {report_filename}", (page_width / 2) - MARGIN - 20))
+    _draw_string(pdf, MARGIN, MARGIN - 2, _ellipsize_for_width(pdf, f"Report file: {report_filename}", (page_width / 2) - MARGIN - 20))
     pdf.drawRightString(page_width - MARGIN, MARGIN - 2, f"Page {page_number}")
-    pdf.drawCentredString(page_width / 2, MARGIN - 2, "Original media untouched; PDF uses embedded preview frames only.")
+    _draw_centred_string(pdf, page_width / 2, MARGIN + 13, "Original media untouched; PDF uses embedded preview frames only.")
 
 
 def _failed_section_lines(
@@ -815,6 +843,14 @@ def _display_image_path(capture: CapturePoint | None) -> Path | None:
     return None
 
 
+def _preview_placeholder_text(capture: CapturePoint | None, image_path: Path | None) -> str:
+    if capture is None:
+        return "not captured"
+    if capture.status is CaptureStatus.SUCCESS:
+        return "preview unavailable" if image_path is not None else "not captured"
+    return capture.status.value
+
+
 def _contact_usable_height(page_size: tuple[float, float] = CONTACT_SHEET_PAGE_SIZE) -> float:
     _page_width, page_height = page_size
     return page_height - (MARGIN * 2) - HEADER_HEIGHT - FOOTER_HEIGHT
@@ -823,9 +859,12 @@ def _contact_usable_height(page_size: tuple[float, float] = CONTACT_SHEET_PAGE_S
 def _image_aspect_ratio(path: Path | None, fallback: float = 16 / 9) -> float:
     if path is None or not path.is_file():
         return fallback
-    with Image.open(path) as image:
-        image = ImageOps.exif_transpose(image)
-        width, height = image.size
+    try:
+        with Image.open(path) as image:
+            transposed = ImageOps.exif_transpose(image)
+            width, height = transposed.size
+    except (OSError, ValueError):
+        return fallback
     if width <= 0 or height <= 0:
         return fallback
     return float(width / height)
@@ -923,26 +962,31 @@ def _pack_contact_pages(
 
 
 def _fit_image(path: Path, max_width: float, max_height: float) -> tuple[float, float]:
-    with Image.open(path) as image:
-        width, height = image.size
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except (OSError, ValueError):
+        return max_width, max_height
     if width <= 0 or height <= 0:
         return max_width, max_height
     scale = min(max_width / width, max_height / height)
     return width * scale, height * scale
 
 
-def _pdf_image_reader(path: Path, max_width_points: float, max_height_points: float) -> ImageReader:
+def _pdf_image_reader(path: Path, max_width_points: float, max_height_points: float) -> ImageReader | None:
     # ReportLab treats one image pixel roughly as one PDF point at 72dpi. Embed only
     # enough pixels for the drawn preview area, capped to avoid bloating PDFs while
     # leaving exported still PNGs and source media untouched.
     target_px = max(96, min(PDF_IMAGE_MAX_PIXELS, int(max(max_width_points, max_height_points) * 2)))
     buffer = BytesIO()
-    with Image.open(path) as image:
-        image = ImageOps.exif_transpose(image)
-        image.thumbnail((target_px, target_px), Image.Resampling.LANCZOS)
-        if image.mode not in {"RGB", "L"}:
-            image = image.convert("RGB")
-        image.save(buffer, format="JPEG", quality=PDF_IMAGE_QUALITY, optimize=True)
+    try:
+        with Image.open(path) as image:
+            transposed = ImageOps.exif_transpose(image)
+            transposed.thumbnail((target_px, target_px), Image.Resampling.LANCZOS)
+            prepared = transposed if transposed.mode in {"RGB", "L"} else transposed.convert("RGB")
+            prepared.save(buffer, format="JPEG", quality=PDF_IMAGE_QUALITY, optimize=True)
+    except (OSError, ValueError):
+        return None
     buffer.seek(0)
     return ImageReader(buffer)
 
@@ -995,44 +1039,6 @@ def _status_color(status: ClipStatus) -> str:
     }.get(status, "#B42318")
 
 
-def _draw_header_mark(pdf: canvas.Canvas, x: float, y: float) -> None:
-    shades = ("#363D44", "#2F363D", "#293039", "#232A32", "#1D242B")
-    for index, shade in enumerate(shades):
-        pdf.setFillColor(colors.HexColor(shade))
-        pdf.rect(x + (index * 17), y - 10, 13, 13, fill=1, stroke=0)
-
-
-def _draw_file_icon(pdf: canvas.Canvas, x: float, y: float) -> None:
-    pdf.setStrokeColor(colors.HexColor("#111820"))
-    pdf.setLineWidth(0.9)
-    pdf.rect(x, y - 12, 10, 14, fill=0, stroke=1)
-    pdf.line(x + 7, y + 2, x + 10, y - 1)
-    pdf.line(x + 7, y + 2, x + 7, y - 1)
-
-
-def _draw_info_icon(pdf: canvas.Canvas, x: float, y: float, color: str) -> None:
-    pdf.setStrokeColor(colors.HexColor(color))
-    pdf.setLineWidth(0.8)
-    pdf.circle(x, y, 3.8, stroke=1, fill=0)
-    pdf.setFillColor(colors.HexColor(color))
-    pdf.setFont("Helvetica-Bold", 5.8)
-    pdf.drawCentredString(x, y - 2.2, "i")
-
-
-def _draw_missing_image_icon(pdf: canvas.Canvas, center_x: float, center_y: float) -> None:
-    width = 28.0
-    height = 22.0
-    x = center_x - (width / 2)
-    y = center_y - (height / 2)
-    pdf.setStrokeColor(colors.HexColor("#B9B2AA"))
-    pdf.setLineWidth(1.2)
-    pdf.roundRect(x, y, width, height, 3, fill=0, stroke=1)
-    pdf.circle(x + 20, y + 15, 2.2, stroke=1, fill=0)
-    pdf.line(x + 4, y + 5, x + 11, y + 12)
-    pdf.line(x + 11, y + 12, x + 16, y + 8)
-    pdf.line(x + 16, y + 8, x + 24, y + 16)
-
-
 def _draw_pill(
     pdf: canvas.Canvas,
     x: float,
@@ -1051,13 +1057,95 @@ def _draw_pill(
     pdf.drawCentredString(x + (width / 2), y + ((height - font_size) / 2) + 2, text)
 
 
+def _needs_korean_font(text: str) -> bool:
+    return any(
+        "\u1100" <= char <= "\u11ff"
+        or "\u3130" <= char <= "\u318f"
+        or "\uac00" <= char <= "\ud7af"
+        for char in text
+    )
+
+
+def _korean_font_name() -> str:
+    try:
+        pdfmetrics.getFont(KOREAN_FONT_NAME)
+        return KOREAN_FONT_NAME
+    except KeyError:
+        pass
+
+    for font_path in KOREAN_FONT_PATHS:
+        if not font_path.is_file():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont(KOREAN_FONT_NAME, str(font_path)))
+            return KOREAN_FONT_NAME
+        except Exception:
+            continue
+
+    try:
+        pdfmetrics.getFont(KOREAN_CID_FONT_NAME)
+    except KeyError:
+        pdfmetrics.registerFont(UnicodeCIDFont(KOREAN_CID_FONT_NAME))
+    return KOREAN_CID_FONT_NAME
+
+
+def _font_for_text(text: str, font_name: str) -> str:
+    if _needs_korean_font(text):
+        return _korean_font_name()
+    return font_name
+
+
+def _text_width(
+    pdf: canvas.Canvas,
+    text: str,
+    font_name: str | None = None,
+    font_size: float | None = None,
+) -> float:
+    base_font = font_name or pdf._fontname
+    size = font_size or pdf._fontsize
+    return float(pdf.stringWidth(text, _font_for_text(text, base_font), size))
+
+
+def _draw_string(pdf: canvas.Canvas, x: float, y: float, text: str) -> None:
+    original_font = getattr(pdf, "_fontname", "Helvetica")
+    original_size = getattr(pdf, "_fontsize", 10)
+    font_name = _font_for_text(text, original_font)
+    if font_name != original_font:
+        pdf.setFont(font_name, original_size)
+    pdf.drawString(x, y, text)
+    if font_name != original_font:
+        pdf.setFont(original_font, original_size)
+
+
+def _draw_right_string(pdf: canvas.Canvas, x: float, y: float, text: str) -> None:
+    original_font = getattr(pdf, "_fontname", "Helvetica")
+    original_size = getattr(pdf, "_fontsize", 10)
+    font_name = _font_for_text(text, original_font)
+    if font_name != original_font:
+        pdf.setFont(font_name, original_size)
+    pdf.drawRightString(x, y, text)
+    if font_name != original_font:
+        pdf.setFont(original_font, original_size)
+
+
+def _draw_centred_string(pdf: canvas.Canvas, x: float, y: float, text: str) -> None:
+    original_font = getattr(pdf, "_fontname", "Helvetica")
+    original_size = getattr(pdf, "_fontsize", 10)
+    font_name = _font_for_text(text, original_font)
+    if font_name != original_font:
+        pdf.setFont(font_name, original_size)
+    pdf.drawCentredString(x, y, text)
+    if font_name != original_font:
+        pdf.setFont(original_font, original_size)
+
+
 def _ellipsize_for_width(pdf: canvas.Canvas, text: str, max_width: float) -> str:
     font_name = pdf._fontname
     font_size = pdf._fontsize
-    if max_width <= 0 or pdf.stringWidth(text, font_name, font_size) <= max_width:
+    if max_width <= 0 or _text_width(pdf, text, font_name, font_size) <= max_width:
         return text
-    ellipsis = "…"
-    if pdf.stringWidth(ellipsis, font_name, font_size) > max_width:
+    ellipsis = "..."
+    if _text_width(pdf, ellipsis, font_name, font_size) > max_width:
         return ""
     lo = 0
     hi = len(text)
@@ -1065,7 +1153,7 @@ def _ellipsize_for_width(pdf: canvas.Canvas, text: str, max_width: float) -> str
     while lo <= hi:
         mid = (lo + hi) // 2
         candidate = text[:mid].rstrip() + ellipsis
-        if pdf.stringWidth(candidate, font_name, font_size) <= max_width:
+        if _text_width(pdf, candidate, font_name, font_size) <= max_width:
             best = candidate
             lo = mid + 1
         else:
@@ -1149,19 +1237,53 @@ def _draw_wrapped_text(
     max_width: float,
     line_height: float,
 ) -> float:
-    words = text.split()
-    if not words:
+    lines = _wrap_text_lines(pdf, text, max_width)
+    if not lines:
         return y - line_height
 
-    line = words[0]
     cursor_y = y
-    for word in words[1:]:
-        candidate = f"{line} {word}"
-        if pdf.stringWidth(candidate, pdf._fontname, pdf._fontsize) <= max_width:
-            line = candidate
-            continue
-        pdf.drawString(x, cursor_y, line)
+    for line in lines:
+        _draw_string(pdf, x, cursor_y, line)
         cursor_y -= line_height
-        line = word
-    pdf.drawString(x, cursor_y, line)
-    return cursor_y - line_height
+    return cursor_y
+
+
+def _wrap_text_lines(pdf: canvas.Canvas, text: str, max_width: float) -> tuple[str, ...]:
+    words = text.split()
+    if not words:
+        return ()
+
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        chunks = _break_long_token(pdf, word, max_width)
+        for chunk in chunks:
+            candidate = chunk if not current else f"{current} {chunk}"
+            if not current or _text_width(pdf, candidate) <= max_width:
+                current = candidate
+                continue
+            lines.append(current)
+            current = chunk
+    if current:
+        lines.append(current)
+    return tuple(lines)
+
+
+def _break_long_token(pdf: canvas.Canvas, token: str, max_width: float) -> tuple[str, ...]:
+    if _text_width(pdf, token) <= max_width:
+        return (token,)
+    if _needs_korean_font(token):
+        return (_ellipsize_for_width(pdf, token, max_width),)
+
+    chunks: list[str] = []
+    current = ""
+    for char in token:
+        candidate = current + char
+        if not current or _text_width(pdf, candidate) <= max_width:
+            current = candidate
+            continue
+        chunks.append(current)
+        current = char
+    if current:
+        chunks.append(current)
+    return tuple(chunks)
