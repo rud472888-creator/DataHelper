@@ -72,7 +72,7 @@ def test_arriraw_art_adapter_probe_and_capture_use_art_cmd_contract(tmp_path: Pa
                 "    import base64",
                 "    output_path = pathlib.Path(argv[argv.index('--output') + 1])",
                 "    output_path.parent.mkdir(parents=True, exist_ok=True)",
-                "    output_path.write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAAC0lEQVR4nGNgYPgPAAEDAQCZc72zAAAAAElFTkSuQmCC'))",
+                "    output_path.write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'))",
                 "else:",
                 "    raise SystemExit(2)",
             ]

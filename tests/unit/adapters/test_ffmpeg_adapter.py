@@ -174,3 +174,63 @@ def test_capture_retries_with_color_metadata_repair_for_mov_swscale_failure(
         "setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709" in arg
         for arg in commands[1]
     )
+
+
+def test_capture_uses_fast_seek_seconds_for_frame_index_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FFmpegAdapter(AdapterSettings())
+    dependency = DependencyRecord(
+        name="ffmpeg",
+        state=AdapterDependencyState.AVAILABLE,
+        configured_path="ffmpeg",
+        resolved_path="/usr/bin/ffmpeg",
+    )
+    plan = CapturePlan(
+        clip_id="candidate-0001",
+        requests=(
+            CaptureRequest(label="Start", requested_ratio=0.0, requested_frame_index=0),
+            CaptureRequest(label="Mid1", requested_ratio=0.5, requested_frame_index=48),
+            CaptureRequest(label="End", requested_ratio=1.0, requested_frame_index=96),
+        ),
+        middle_count=1,
+        used_frame_count=True,
+    )
+    commands: list[list[str]] = []
+
+    def fake_run(
+        command: list[str],
+        *,
+        capture_output: bool,
+        text: bool,
+        check: bool,
+        timeout: int,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, text, check, timeout
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"png")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(adapter._inspector, "ffmpeg", lambda: dependency)
+    monkeypatch.setattr(adapter, "_capture_context", lambda _candidate: CaptureContext(fps_num=24, fps_den=1))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    results = adapter.capture(make_candidate(), plan, profile=CaptureProfile(name="preview"), staging_dir=tmp_path)
+
+    assert results[0].status is CaptureStatus.SUCCESS
+    assert commands[1] == [
+        "/usr/bin/ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-ss",
+        "2.000000",
+        "-i",
+        "/clips/A001_C001.mov",
+        "-frames:v",
+        "1",
+        "-vf",
+        "scale=min(960\\,iw):-2",
+        str(tmp_path / "02_mid1.png"),
+    ]

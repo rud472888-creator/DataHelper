@@ -139,7 +139,13 @@ class FFmpegAdapter:
                 continue
 
             output_path = staging_dir / f"{index:02d}_{request.label.lower()}.png"
-            command = _build_capture_command(ffmpeg.resolved_path, candidate.source_path, request, output_path)
+            command = _build_capture_command(
+                ffmpeg.resolved_path,
+                candidate.source_path,
+                request,
+                output_path,
+                seek_seconds=_fast_seek_seconds(request, context),
+            )
             try:
                 subprocess.run(command, capture_output=True, text=True, check=True, timeout=60)
             except subprocess.TimeoutExpired:
@@ -158,6 +164,7 @@ class FFmpegAdapter:
                         request,
                         output_path,
                         repair_color_metadata=True,
+                        seek_seconds=_fast_seek_seconds(request, context),
                     )
                     try:
                         subprocess.run(repaired_command, capture_output=True, text=True, check=True, timeout=60)
@@ -282,13 +289,14 @@ def _build_capture_command(
     output_path: Path,
     *,
     repair_color_metadata: bool = False,
+    seek_seconds: float | None = None,
 ) -> list[str]:
     command = [ffmpeg_path, "-y", "-v", "error"]
-    if request.requested_seconds is not None:
+    if seek_seconds is not None:
         command.extend(
             [
                 "-ss",
-                f"{request.requested_seconds:.6f}",
+                f"{seek_seconds:.6f}",
                 "-i",
                 source_path,
                 "-frames:v",
@@ -333,6 +341,12 @@ def _is_swscale_color_metadata_failure(stderr: str | None) -> bool:
     if stderr is None:
         return False
     return "Unsupported input (Operation not supported)" in stderr and "swscaler" in stderr
+
+
+def _fast_seek_seconds(request: CaptureRequest, context: CaptureContext) -> float | None:
+    if request.requested_seconds is not None:
+        return request.requested_seconds
+    return context.seconds_for_frame(request.requested_frame_index)
 
 
 def _decode_failed_result(request: CaptureRequest, *, error: AdapterError) -> CaptureResult:
