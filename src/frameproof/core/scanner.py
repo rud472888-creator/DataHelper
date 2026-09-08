@@ -8,6 +8,12 @@ def _normalized_extension(path: Path) -> str:
     return path.suffix.lower().lstrip(".")
 
 
+def _is_supported_candidate(path: Path, allowed_extensions: set[str]) -> bool:
+    if path.name.startswith("._"):
+        return False
+    return _normalized_extension(path) in allowed_extensions
+
+
 def scan_inputs(
     input_paths: Sequence[Path],
     *,
@@ -20,7 +26,7 @@ def scan_inputs(
     for raw_path in input_paths:
         path = raw_path.expanduser()
         if path.is_file():
-            if _normalized_extension(path) in allowed_extensions:
+            if _is_supported_candidate(path, allowed_extensions):
                 discovered.add(path.resolve())
             continue
 
@@ -29,7 +35,7 @@ def scan_inputs(
 
         iterator = path.rglob("*") if recursive else path.glob("*")
         for child in iterator:
-            if child.is_file() and _normalized_extension(child) in allowed_extensions:
+            if child.is_file() and _is_supported_candidate(child, allowed_extensions):
                 discovered.add(child.resolve())
 
     return tuple(sorted(discovered, key=lambda item: str(item).lower()))

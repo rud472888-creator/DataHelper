@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+from typing import BinaryIO
 
 from frameproof.adapters.arriraw_art_adapter_client import ARRIRAWArtAdapterClient
 from frameproof.adapters.braw_adapter_client import BRAWAdapterClient
@@ -31,6 +33,22 @@ RAW_EXTENSION_MAP: dict[str, FormatFamily] = {
     "ari": FormatFamily.ARRIRAW,
 }
 
+_RECOGNIZED_ARRIRAW_PICTURE_CODING_ULS: tuple[bytes, ...] = tuple(
+    bytes.fromhex(value)
+    for value in (
+        "060e2b340401010d0401020102010101",
+        "060e2b340401010d0401020102010102",
+        "060e2b340401010d0401020102010103",
+        "060e2b340401010d0401020102010201",
+        "060e2b340401010d0401020102010202",
+        "060e2b340401010d0f01020101010100",
+        "060e2b340401010d0f01020101010200",
+    )
+)
+_MXF_HEADER_SCAN_LIMIT_BYTES = 16 * 1024 * 1024
+_MXF_HEADER_SCAN_CHUNK_BYTES = 64 * 1024
+_MXF_SCAN_OVERLAP_BYTES = len(_RECOGNIZED_ARRIRAW_PICTURE_CODING_ULS[0]) - 1
+
 
 @dataclass(frozen=True)
 class AdapterSelection:
@@ -59,10 +77,10 @@ def resolve_adapter(candidate: ClipCandidate, settings: AdapterSettings) -> Adap
             adapter_name="r3d_adapter",
             adapter=R3DAdapterClient(settings),
         )
-    if raw_family is FormatFamily.ARRIRAW:
+    if raw_family is FormatFamily.ARRIRAW or (extension == "mxf" and _is_arriraw_mxf(candidate)):
         return AdapterSelection(
             candidate=candidate,
-            format_family=raw_family,
+            format_family=FormatFamily.ARRIRAW,
             adapter_name="arriraw_art_adapter",
             adapter=ARRIRAWArtAdapterClient(settings),
         )
@@ -83,3 +101,31 @@ def resolve_adapter(candidate: ClipCandidate, settings: AdapterSettings) -> Adap
         adapter_name="ffmpeg",
         adapter=FFmpegAdapter(settings),
     )
+
+
+def _is_arriraw_mxf(candidate: ClipCandidate) -> bool:
+    try:
+        with Path(candidate.source_path).open("rb") as source:
+            return _stream_contains_arriraw_ul(source)
+    except OSError:
+        return False
+
+
+def _stream_contains_arriraw_ul(source: BinaryIO) -> bool:
+    remaining = _MXF_HEADER_SCAN_LIMIT_BYTES
+    overlap = b""
+
+    while remaining > 0:
+        chunk = source.read(min(_MXF_HEADER_SCAN_CHUNK_BYTES, remaining))
+        if not chunk:
+            return False
+        remaining -= len(chunk)
+
+        scan_window = overlap + chunk
+        if any(
+            ul in scan_window for ul in _RECOGNIZED_ARRIRAW_PICTURE_CODING_ULS
+        ):
+            return True
+        overlap = scan_window[-_MXF_SCAN_OVERLAP_BYTES:]
+
+    return False

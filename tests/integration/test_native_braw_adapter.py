@@ -29,6 +29,18 @@ def _run_adapter(payload: dict[str, object], *, env: dict[str, str] | None = Non
     return completed.returncode, json.loads(completed.stdout)
 
 
+def _fake_runtime(tmp_path: Path, helper_body: str) -> dict[str, str]:
+    helper = tmp_path / "fake-braw-helper"
+    helper.write_text(f"#!/bin/sh\n{helper_body}\n", encoding="utf-8")
+    helper.chmod(0o755)
+    libraries = tmp_path / "Libraries"
+    (libraries / "BlackmagicRawAPI.framework").mkdir(parents=True)
+    return {
+        "FRAMEPROOF_BRAW_NATIVE_HELPER": str(helper),
+        "BLACKMAGIC_RAW_SDK_LIBRARIES": str(libraries),
+    }
+
+
 def test_native_braw_adapter_dependency_error_is_actionable(tmp_path: Path) -> None:
     rc, response = _run_adapter(
         {"request_id": "version-missing", "command": "version"},
@@ -41,6 +53,45 @@ def test_native_braw_adapter_dependency_error_is_actionable(tmp_path: Path) -> N
     message = response["errors"][0]["message"]
     assert "Blackmagic RAW SDK" in message
     assert "native helper not found" in message
+
+
+def test_native_braw_adapter_version_executes_helper_runtime_check(tmp_path: Path) -> None:
+    env = _fake_runtime(
+        tmp_path,
+        "test \"$1\" = version && test -d \"$2/BlackmagicRawAPI.framework\" || exit 9\n"
+        "printf '%s' '{\"ok\":true,\"sdk_initialized\":true}'",
+    )
+
+    rc, response = _run_adapter({"request_id": "version-ok", "command": "version"}, env=env)
+
+    assert rc == 0
+    assert response["request_id"] == "version-ok"
+    assert response["ok"] is True
+    assert response["status"] == "success"
+
+
+def test_native_braw_adapter_version_maps_helper_exit_127_to_dependency_missing(tmp_path: Path) -> None:
+    env = _fake_runtime(tmp_path, "exit 127")
+
+    rc, response = _run_adapter({"request_id": "version-exec-failed", "command": "version"}, env=env)
+
+    assert rc == 2
+    assert response["ok"] is False
+    assert response["status"] == "dependency_missing"
+    assert response["errors"][0]["code"] == "dependency_missing"
+    assert "status 127" in response["errors"][0]["message"]
+
+
+def test_native_braw_adapter_version_maps_invalid_helper_output_to_runtime_error(tmp_path: Path) -> None:
+    env = _fake_runtime(tmp_path, "printf '%s' 'not-json'")
+
+    rc, response = _run_adapter({"request_id": "version-invalid", "command": "version"}, env=env)
+
+    assert rc == 2
+    assert response["ok"] is False
+    assert response["status"] == "runtime_error"
+    assert response["errors"][0]["code"] == "runtime_error"
+    assert "invalid JSON" in response["errors"][0]["message"]
 
 
 @pytest.mark.skipif(

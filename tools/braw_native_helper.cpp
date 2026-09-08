@@ -217,6 +217,22 @@ static int fail_json(const std::string& message) {
     return 2;
 }
 
+static int check_runtime(const char* sdkLibPath) {
+    IBlackmagicRawFactory* factory = make_factory(sdkLibPath);
+    if (!factory) return fail_json("Failed to create Blackmagic RAW factory. Verify Blackmagic RAW SDK/runtime 5.1 is installed and sdk_libraries_path points to the SDK Mac/Libraries directory.");
+    IBlackmagicRaw* codec = nullptr;
+    HRESULT result = factory->CreateCodec(&codec);
+    if (result != S_OK || codec == nullptr) {
+        if (codec) codec->Release();
+        factory->Release();
+        return fail_json("Failed to create Blackmagic RAW codec. Verify the SDK framework can be loaded and initialized.");
+    }
+    codec->Release();
+    factory->Release();
+    std::cout << "{\"ok\":true,\"sdk_initialized\":true}" << std::endl;
+    return 0;
+}
+
 static int probe_clip(const char* clipPath, const char* sdkLibPath) {
     IBlackmagicRawFactory* factory = make_factory(sdkLibPath);
     if (!factory) return fail_json("Failed to create Blackmagic RAW factory. Verify Blackmagic RAW SDK/runtime 5.1 is installed and sdk_libraries_path points to the SDK Mac/Libraries directory.");
@@ -339,10 +355,15 @@ static int capture_frame(const char* clipPath, uint64_t frameIndex, const char* 
 }
 
 int main(int argc, const char* argv[]) {
-    if (argc < 3) return fail_json("Usage: braw_native_helper probe CLIP [SDK_LIBRARIES] | capture CLIP FRAME OUTPUT [SDK_LIBRARIES]");
+    if (argc < 2) return fail_json("Usage: braw_native_helper version [SDK_LIBRARIES] | probe CLIP [SDK_LIBRARIES] | capture CLIP FRAME OUTPUT [SDK_LIBRARIES]");
     std::string command = argv[1];
     const char* defaultLibs = "/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries";
+    if (command == "version") {
+        const char* libs = argc >= 3 ? argv[2] : defaultLibs;
+        return check_runtime(libs);
+    }
     if (command == "probe") {
+        if (argc < 3) return fail_json("Usage: braw_native_helper probe CLIP [SDK_LIBRARIES]");
         const char* libs = argc >= 4 ? argv[3] : defaultLibs;
         return probe_clip(argv[2], libs);
     }

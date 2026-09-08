@@ -81,17 +81,74 @@ def _check_dependencies() -> str | None:
 
 def _run_helper(args: list[str]) -> dict[str, Any]:
     cmd = [str(_helper_path()), *args, str(_sdk_libraries_path())]
-    completed = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120)
+    try:
+        completed = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=120)
+    except OSError as exc:
+        return {"ok": False, "error": f"native helper could not be executed: {exc}", "_failure_status": "dependency_missing"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "native helper timed out", "_failure_status": "runtime_error"}
     output = (completed.stdout or "").strip()
+    if completed.returncode in {126, 127}:
+        detail = (completed.stderr or output or "native helper could not be executed").strip()
+        return {
+            "ok": False,
+            "error": f"native helper exited with status {completed.returncode}: {detail}",
+            "_failure_status": "dependency_missing",
+        }
     if not output:
-        return {"ok": False, "error": (completed.stderr or "native helper returned no output").strip()}
+        return {
+            "ok": False,
+            "error": (completed.stderr or "native helper returned no output").strip(),
+            "_failure_status": "runtime_error",
+        }
     try:
         parsed = json.loads(output)
     except json.JSONDecodeError:
-        return {"ok": False, "error": f"native helper returned invalid JSON: {output[:500]}"}
+        return {
+            "ok": False,
+            "error": f"native helper returned invalid JSON: {output[:500]}",
+            "_failure_status": "runtime_error",
+        }
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("ok"), bool):
+        return {
+            "ok": False,
+            "error": f"native helper returned an invalid response: {output[:500]}",
+            "_failure_status": "runtime_error",
+        }
     if completed.returncode != 0 and parsed.get("ok") is not False:
-        parsed = {"ok": False, "error": completed.stderr or output}
+        parsed = {
+            "ok": False,
+            "error": (completed.stderr or output).strip(),
+            "_failure_status": "runtime_error",
+        }
     return parsed
+
+
+def _version_payload(request_id: str | None) -> dict[str, Any]:
+    dep = _check_dependencies()
+    if dep:
+        return _dependency_error(request_id, dep)
+
+    result = _run_helper(["version"])
+    if not result.get("ok"):
+        status = str(result.get("_failure_status") or "dependency_missing")
+        return _error(
+            request_id,
+            status,
+            f"Blackmagic RAW native helper runtime check failed: {result.get('error', 'unknown error')}",
+            status,
+        )
+
+    return _response(
+        request_id,
+        True,
+        "success",
+        metadata_raw={
+            "native_no_proxy": True,
+            "sdk_libraries_path": str(_sdk_libraries_path()),
+            "native_helper": str(_helper_path()),
+        },
+    )
 
 
 def _fps_parts(fps: float) -> tuple[int, int]:
@@ -223,20 +280,7 @@ def main() -> int:
         request_id = payload.get("request_id")
         command = payload.get("command")
         if command == "version":
-            dep = _check_dependencies()
-            if dep:
-                response = _dependency_error(request_id, dep)
-            else:
-                response = _response(
-                    request_id,
-                    True,
-                    "success",
-                    metadata_raw={
-                        "native_no_proxy": True,
-                        "sdk_libraries_path": str(_sdk_libraries_path()),
-                        "native_helper": str(_helper_path()),
-                    },
-                )
+            response = _version_payload(request_id)
         elif command == "probe":
             response = _probe_payload(request_id, _source_path(payload))
         elif command == "capture":

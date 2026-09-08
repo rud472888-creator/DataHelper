@@ -56,7 +56,8 @@ class ARRIRAWArtAdapterClient(CaptureAdapter):
 
         with tempfile.TemporaryDirectory(prefix="frameproof-arri-probe-") as temporary_root:
             metadata_path = Path(temporary_root) / "metadata.json"
-            command = _metadata_export_command(dependency.resolved_path, candidate.source_path, metadata_path)
+            art_input_path = _prepare_art_input(candidate, Path(temporary_root))
+            command = _metadata_export_command(dependency.resolved_path, art_input_path, metadata_path)
             try:
                 completed = subprocess.run(
                     command,
@@ -162,6 +163,25 @@ class ARRIRAWArtAdapterClient(CaptureAdapter):
                 ),
             )
 
+        with tempfile.TemporaryDirectory(prefix="frameproof-arri-capture-") as temporary_root:
+            art_input_path = _prepare_art_input(candidate, Path(temporary_root))
+            return self._capture_with_input(
+                plan=plan,
+                staging_dir=staging_dir,
+                executable_path=dependency.resolved_path,
+                art_input_path=art_input_path,
+                availability=availability,
+            )
+
+    def _capture_with_input(
+        self,
+        *,
+        plan: CapturePlan,
+        staging_dir: Path,
+        executable_path: str,
+        art_input_path: str,
+        availability: AdapterAvailability,
+    ) -> tuple[CaptureResult, ...]:
         results: list[CaptureResult] = []
         by_label: dict[str, CaptureResult] = {}
         for index, request in enumerate(plan.requests, start=1):
@@ -188,8 +208,8 @@ class ARRIRAWArtAdapterClient(CaptureAdapter):
             output_path = staging_dir / f"{index:02d}_{request.label.lower()}.png"
             art_output_path = staging_dir / f"{index:02d}_{request.label.lower()}_art.tif"
             command = _process_frame_command(
-                dependency.resolved_path,
-                candidate.source_path,
+                executable_path,
+                art_input_path,
                 art_output_path,
                 request,
             )
@@ -308,6 +328,22 @@ def _build_clip_info(candidate: ClipCandidate, payload: Mapping[str, object]) ->
         tc_drop_frame=(";" in start_timecode) if start_timecode is not None else _optional_bool(payload.get("tc_drop_frame")),
         metadata_raw={"candidate_id": candidate.candidate_id, "source_path": candidate.source_path},
     )
+
+
+def _prepare_art_input(candidate: ClipCandidate, temporary_root: Path) -> str:
+    source_path = Path(candidate.source_path)
+    if source_path.suffix.lower() != ".ari":
+        return candidate.source_path
+
+    part_paths = tuple(Path(part_file) for part_file in candidate.part_files if Path(part_file).suffix.lower() == ".ari")
+    if not part_paths:
+        part_paths = (source_path,)
+
+    input_directory = temporary_root / "input"
+    input_directory.mkdir()
+    for part_path in part_paths:
+        (input_directory / part_path.name).symlink_to(part_path.resolve())
+    return str(input_directory)
 
 
 def _metadata_export_command(
