@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import replace
-from typing import Mapping
-from dataclasses import dataclass
-from typing import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 
 from .models import (
     BatchStatus,
@@ -17,7 +15,7 @@ from .models import (
     ProbeResult,
     ReportItem,
 )
-from .timecode import resolve_timecode_display
+from .timecode import calculate_timecode_display, resolve_timecode_display
 
 
 @dataclass(frozen=True)
@@ -42,6 +40,7 @@ def build_report_item(
             errors=probe_result.errors,
         )
 
+    clip = _with_calculated_end_timecode(clip)
     captures = tuple(_build_capture_point(clip, result) for result in capture_results)
     status = _resolve_clip_status(probe_result.status, captures)
     warnings = _merge_strings(
@@ -115,7 +114,9 @@ def _build_capture_point(clip: ClipInfo, result: CaptureResult) -> CapturePoint:
         actual_timecode=result.actual_timecode,
         actual_timecode_source=result.actual_timecode_source,
         start_timecode=clip.start_timecode,
-        container_timecode=clip.start_timecode,
+        # The container only stores the first frame's timecode; showing it for
+        # a later capture would mislabel that frame, so elapsed time wins there.
+        container_timecode=clip.start_timecode if _is_first_frame(result) else None,
         actual_frame_index=result.actual_frame_index,
         actual_seconds=result.actual_seconds,
         fps_num=clip.fps_num,
@@ -140,6 +141,27 @@ def _build_capture_point(clip: ClipInfo, result: CaptureResult) -> CapturePoint:
             errors=result.errors,
         )
     )
+
+
+def _is_first_frame(result: CaptureResult) -> bool:
+    if result.actual_frame_index is not None:
+        return result.actual_frame_index == 0
+    return result.actual_seconds is None or result.actual_seconds == 0
+
+
+def _with_calculated_end_timecode(clip: ClipInfo) -> ClipInfo:
+    if clip.end_timecode is not None or clip.frame_count is None or clip.frame_count <= 0:
+        return clip
+    display = calculate_timecode_display(
+        start_timecode=clip.start_timecode,
+        frame_offset=clip.frame_count - 1,
+        fps_num=clip.fps_num,
+        fps_den=clip.fps_den,
+        tc_drop_frame=clip.tc_drop_frame,
+    )
+    if display is None:
+        return clip
+    return replace(clip, end_timecode=display.value)
 
 
 def _resolve_clip_status(

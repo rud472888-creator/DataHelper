@@ -12,12 +12,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 import re
 from xml.sax.saxutils import escape
 
-from PIL import Image, ImageOps
+from PIL import Image
 from reportlab.lib import colors  # type: ignore[import-untyped]
 from reportlab.lib.pagesizes import A4, landscape, letter  # type: ignore[import-untyped]
 from reportlab.lib.styles import ParagraphStyle  # type: ignore[import-untyped]
@@ -33,6 +34,7 @@ from frameproof.config.settings import AppSettings, PathDisplayMode, ReportLayou
 from frameproof.core.models import (
     BatchSummary, CapturePoint, CaptureStatus, ClipInfo, ReportItem, TimecodeSource,
 )
+from frameproof.output.atomic import atomic_output_path
 
 CONTACT_SHEET_PAGE_SIZE = A4
 DETAIL_PAGE_SIZE = landscape(letter)
@@ -155,11 +157,16 @@ def _bounded(text: object, style: ParagraphStyle, width: float, lines: int = 1, 
     value = " ".join(str(text).split())
     height = style.leading * lines + .01
 
-    def fits(candidate: str) -> bool:
-        return bool(_p(candidate, style, width).wrap(width, height)[1] <= height)
+    def fitted(candidate: str) -> Paragraph | None:
+        paragraph = _p(candidate, style, width)
+        return paragraph if paragraph.wrap(width, height)[1] <= height else None
 
-    if fits(value):
-        return _p(value, style, width)
+    def fits(candidate: str) -> bool:
+        return fitted(candidate) is not None
+
+    whole = fitted(value)
+    if whole is not None:
+        return whole
     marker = " …(축약) "
 
     def excerpt(length: int) -> str:
@@ -178,8 +185,8 @@ def _bounded(text: object, style: ParagraphStyle, width: float, lines: int = 1, 
             low = middle
         else:
             high = middle - 1
-    result = _p(excerpt(low), style, width)
-    if result.wrap(width, height)[1] > height:
+    result = fitted(excerpt(low))
+    if result is None:
         raise ValueError("The compact PDF field is too narrow for its abbreviation marker")
     return result
 
@@ -289,13 +296,56 @@ def _fit_dimensions(size: tuple[int, int], max_width: float, max_height: float) 
     return size[0] * scale, size[1] * scale
 
 
+_EXIF_ORIENTATION = 0x0112
+_ORIENTATION_TRANSPOSE = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
+
+
+def _orientation(image: Image.Image) -> int:
+    value = image.getexif().get(_EXIF_ORIENTATION, 1)
+    return value if isinstance(value, int) else 1
+
+
+def _oriented_size(size: tuple[int, int], orientation: int) -> tuple[int, int]:
+    return (size[1], size[0]) if orientation in (5, 6, 7, 8) else size
+
+
 def _fit_image(path: Path, max_width: float, max_height: float) -> tuple[float, float]:
     try:
+        # Header-only read: the pixel data is never decoded here.
         with Image.open(path) as image:
-            oriented = ImageOps.exif_transpose(image)
-            return _fit_dimensions(oriented.size, max_width, max_height)
+            return _fit_dimensions(_oriented_size(image.size, _orientation(image)), max_width, max_height)
     except (OSError, ValueError):
         return max_width, max_height
+
+
+@lru_cache(maxsize=256)
+def _encoded_preview(path: str, mtime_ns: int, file_size: int, target: int) -> tuple[bytes, tuple[int, int]]:
+    """Downscaled JPEG bytes plus the oriented full-resolution size.
+
+    Keyed by file identity so duplicate captures (short clips) and repeated
+    renders reuse one encode; identical bytes also let ReportLab embed the
+    image once. Shrinking happens before the EXIF rotation, and JPEG sources
+    decode at reduced DCT scale, so full-resolution pixels are never copied.
+    """
+    del mtime_ns, file_size
+    with Image.open(path) as image:
+        orientation = _orientation(image)
+        full_size = _oriented_size(image.size, orientation)
+        image.draft("RGB", (target, target))
+        image.thumbnail((target, target), Image.Resampling.LANCZOS, reducing_gap=3.0)
+        prepared: Image.Image = image
+        if orientation in _ORIENTATION_TRANSPOSE:
+            prepared = prepared.transpose(_ORIENTATION_TRANSPOSE[orientation])
+        if prepared.mode not in {"RGB", "L"}:
+            prepared = prepared.convert("RGB")
+        buffer = BytesIO()
+        prepared.save(buffer, format="JPEG", quality=PDF_IMAGE_QUALITY, optimize=True)
+    return buffer.getvalue(), full_size
 
 
 def _preview(capture: CapturePoint | None, width: float, height: float,
@@ -304,16 +354,11 @@ def _preview(capture: CapturePoint | None, width: float, height: float,
     reason = "캡처 미설정" if capture is None else "파일 없음"
     if path is not None:
         try:
-            with Image.open(path) as image:
-                oriented = ImageOps.exif_transpose(image)
-                dimensions = _fit_dimensions(oriented.size, width, height)
-                target = max(96, min(PDF_IMAGE_MAX_PIXELS, int(max(width, height) * 2)))
-                oriented.thumbnail((target, target), Image.Resampling.LANCZOS)
-                prepared = oriented if oriented.mode in {"RGB", "L"} else oriented.convert("RGB")
-                buffer = BytesIO()
-                prepared.save(buffer, format="JPEG", quality=PDF_IMAGE_QUALITY, optimize=True)
-                buffer.seek(0)
-            return PDFImage(buffer, width=dimensions[0], height=dimensions[1], hAlign="LEFT"), None
+            stat = path.stat()
+            target = max(96, min(PDF_IMAGE_MAX_PIXELS, int(max(width, height) * 2)))
+            data, full_size = _encoded_preview(str(path), stat.st_mtime_ns, stat.st_size, target)
+            dimensions = _fit_dimensions(full_size, width, height)
+            return PDFImage(BytesIO(data), width=dimensions[0], height=dimensions[1], hAlign="LEFT"), None
         except FileNotFoundError:
             reason = "파일 없음"
         except (OSError, ValueError):
@@ -512,8 +557,6 @@ def _render(output_path: Path, settings: AppSettings, items: Iterable[ReportItem
     page_size = CONTACT_SHEET_PAGE_SIZE if portrait else DETAIL_PAGE_SIZE
     width = page_size[0] - 2 * MARGIN
     intro_height, row_height = (75.0, 222.0) if portrait else (64.0, 150.0)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document = _ReportDocument(str(output_path), presentation.title, page_size, styles)
     story: list[object] = []
     if not presentation.clips:
         story.extend((_intro(presentation, settings, summary, width, styles, intro_height),
@@ -524,7 +567,8 @@ def _render(output_path: Path, settings: AppSettings, items: Iterable[ReportItem
         story.append(_intro(presentation, settings, summary, width, styles, intro_height))
         story.extend(_clip_story(clip, layout, settings, width, styles, row_height)
                      for clip in presentation.clips[offset:offset + 3])
-    document.build(story)
+    with atomic_output_path(output_path) as temp_path:
+        _ReportDocument(str(temp_path), presentation.title, page_size, styles).build(story)
 
 
 def render_pdf(output_path: Path, settings: AppSettings, items: Iterable[ReportItem], summary: BatchSummary) -> None:

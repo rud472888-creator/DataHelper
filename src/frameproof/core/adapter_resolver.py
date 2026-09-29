@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
@@ -60,7 +61,25 @@ class AdapterSelection:
     terminal_message: str | None = None
 
 
-def resolve_adapter(candidate: ClipCandidate, settings: AdapterSettings) -> AdapterSelection:
+def resolve_adapter(
+    candidate: ClipCandidate,
+    settings: AdapterSettings,
+    *,
+    adapter_cache: MutableMapping[str, CaptureAdapter] | None = None,
+) -> AdapterSelection:
+    """Pick the adapter for one candidate.
+
+    Passing the same ``adapter_cache`` for a whole batch reuses one adapter per
+    type, so dependency runtime checks run once per batch instead of per clip.
+    """
+
+    def shared(name: str, factory: Callable[[AdapterSettings], CaptureAdapter]) -> CaptureAdapter:
+        if adapter_cache is None:
+            return factory(settings)
+        if name not in adapter_cache:
+            adapter_cache[name] = factory(settings)
+        return adapter_cache[name]
+
     extension = (candidate.format_hint or "").lower()
     raw_family = RAW_EXTENSION_MAP.get(extension)
     if raw_family is FormatFamily.BRAW:
@@ -68,21 +87,21 @@ def resolve_adapter(candidate: ClipCandidate, settings: AdapterSettings) -> Adap
             candidate=candidate,
             format_family=raw_family,
             adapter_name="braw_adapter",
-            adapter=BRAWAdapterClient(settings),
+            adapter=shared("braw_adapter", BRAWAdapterClient),
         )
     if raw_family is FormatFamily.R3D:
         return AdapterSelection(
             candidate=candidate,
             format_family=raw_family,
             adapter_name="r3d_adapter",
-            adapter=R3DAdapterClient(settings),
+            adapter=shared("r3d_adapter", R3DAdapterClient),
         )
     if raw_family is FormatFamily.ARRIRAW or (extension == "mxf" and _is_arriraw_mxf(candidate)):
         return AdapterSelection(
             candidate=candidate,
             format_family=FormatFamily.ARRIRAW,
             adapter_name="arriraw_art_adapter",
-            adapter=ARRIRAWArtAdapterClient(settings),
+            adapter=shared("arriraw_art_adapter", ARRIRAWArtAdapterClient),
         )
 
     if extension not in STANDARD_EXTENSIONS:
@@ -99,7 +118,7 @@ def resolve_adapter(candidate: ClipCandidate, settings: AdapterSettings) -> Adap
         candidate=candidate,
         format_family=FormatFamily.STANDARD,
         adapter_name="ffmpeg",
-        adapter=FFmpegAdapter(settings),
+        adapter=shared("ffmpeg", FFmpegAdapter),
     )
 
 

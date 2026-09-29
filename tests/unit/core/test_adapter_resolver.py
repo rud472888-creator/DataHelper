@@ -108,3 +108,25 @@ def test_resolve_adapter_falls_back_to_ffmpeg_when_mxf_read_fails(monkeypatch, t
     assert selection.format_family is FormatFamily.STANDARD
     assert selection.adapter_name == "ffmpeg"
     assert isinstance(selection.adapter, FFmpegAdapter)
+
+
+def test_resolve_adapter_shares_one_adapter_per_type_with_a_batch_cache(tmp_path: Path) -> None:
+    cache: dict[str, object] = {}
+    first = resolve_adapter(
+        ClipCandidate(candidate_id="a", source_path=str(tmp_path / "a.mov"), format_hint="mov"),
+        AdapterSettings(),
+        adapter_cache=cache,  # type: ignore[arg-type]
+    )
+    second = resolve_adapter(
+        ClipCandidate(candidate_id="b", source_path=str(tmp_path / "b.mp4"), format_hint="mp4"),
+        AdapterSettings(),
+        adapter_cache=cache,  # type: ignore[arg-type]
+    )
+    uncached = resolve_adapter(
+        ClipCandidate(candidate_id="c", source_path=str(tmp_path / "c.mp4"), format_hint="mp4"),
+        AdapterSettings(),
+    )
+
+    assert isinstance(first.adapter, FFmpegAdapter)
+    assert first.adapter is second.adapter
+    assert uncached.adapter is not first.adapter

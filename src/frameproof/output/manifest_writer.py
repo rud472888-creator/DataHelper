@@ -8,6 +8,7 @@ from typing import Any
 from frameproof.config.settings import OutputSettings
 from frameproof.core.models import AdapterError, CapturePoint
 from frameproof.core.models import BatchSummary, ReportItem
+from frameproof.output.atomic import atomic_output_path
 
 
 def build_manifest_rows(items: tuple[ReportItem, ...]) -> list[dict[str, Any]]:
@@ -79,18 +80,14 @@ def write_manifests(
 
     if output_settings.write_csv:
         assert csv_path is not None
-        csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        with atomic_output_path(csv_path) as temp_path, temp_path.open("w", encoding="utf-8", newline="") as handle:
             if rows:
                 writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
                 writer.writeheader()
                 writer.writerows(rows)
-            else:
-                handle.write("")
 
     if output_settings.write_json:
         assert json_path is not None
-        json_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "summary": {
                 "total_clips": summary.total_clips,
@@ -104,7 +101,8 @@ def write_manifests(
             "rows": rows,
             "clips": [_serialize_report_item(item) for item in items],
         }
-        json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        with atomic_output_path(json_path) as temp_path:
+            temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
     return csv_path if output_settings.write_csv else None, json_path if output_settings.write_json else None
 
