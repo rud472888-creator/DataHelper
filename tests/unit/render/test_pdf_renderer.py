@@ -1,735 +1,268 @@
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import asdict, replace
 from pathlib import Path
-import base64
 import re
-import zlib
+import shutil
+import subprocess
+import xml.etree.ElementTree as ET
 
-from PIL import Image
+import pytest
 
-from frameproof.config.settings import AppSettings, PathDisplayMode
-from frameproof.core.models import (
-    AdapterError,
-    AdapterErrorCode,
-    BatchStatus,
-    BatchSummary,
-    CapturePoint,
-    CaptureStatus,
-    ClipInfo,
-    ClipStatus,
-    FormatFamily,
-    ReportItem,
-    TimecodeSource,
-)
-from frameproof.render import render_pdf
-from frameproof.render.pdf_renderer import (
-    CONTACT_FRAME_CAPTION_HEIGHT,
-    CONTACT_FRAME_INSET,
-    CONTACT_SHEET_PAGE_SIZE,
-    _clips_per_page,
-    _contact_usable_height,
-    _display_image_path,
-    _display_path,
-    _fit_image,
-    _measure_contact_clip_card,
-    _measure_contact_frame,
-    _measure_contact_preview,
-    _pack_contact_pages,
-    _draw_contact_preview_block,
-    _draw_contact_preview_triptych,
-    _input_summary,
-    _start_middle_end_captures,
-)
+from frameproof.config.settings import PathDisplayMode, ReportLayout
+from frameproof.core.models import BatchStatus, BatchSummary, CaptureStatus
+from frameproof.core.report_builder import build_batch_summary
+from frameproof.render import pdf_renderer as renderer
+from frameproof.output.manifest_writer import build_manifest_rows
+from density_fixtures import make_density_cases
+from pressure_fixtures import IDENTIFIER, PHRASE, TITLE, make_cases, settings
 
 
-def make_png(path: Path, size: tuple[int, int] = (48, 27)) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", size, color=(220, 180, 90)).save(path)
+@pytest.fixture(scope="module")
+def cases(tmp_path_factory):
+    return make_cases(tmp_path_factory.mktemp("pressure-images"))
 
 
-def pdf_text(path: Path) -> str:
-    data = path.read_bytes()
-    chunks = [data.decode("latin-1", errors="ignore")]
-    cursor = 0
-    while True:
-        stream_at = data.find(b"stream", cursor)
-        if stream_at == -1:
-            break
-        stream_start = stream_at + len(b"stream")
-        if data[stream_start : stream_start + 2] == b"\r\n":
-            stream_start += 2
-        elif data[stream_start : stream_start + 1] in {b"\r", b"\n"}:
-            stream_start += 1
-        stream_end = data.find(b"endstream", stream_start)
-        if stream_end == -1:
-            break
-        payload = data[stream_start:stream_end].strip()
-        object_header = data[max(0, data.rfind(b"<<", 0, stream_at)) : stream_at]
-        try:
-            if b"ASCII85Decode" in object_header:
-                payload = base64.a85decode(payload, adobe=True)
-            if b"FlateDecode" in object_header:
-                payload = zlib.decompress(payload)
-            chunks.append(payload.decode("latin-1", errors="ignore"))
-        except Exception:
-            pass
-        cursor = stream_end + len(b"endstream")
-    return "\n".join(chunks)
+@pytest.fixture(scope="module")
+def density(tmp_path_factory):
+    return make_density_cases(tmp_path_factory.mktemp("density-images"))
 
 
-def pdf_page_count(path: Path) -> int:
+def pdf_text(path: Path, option="-raw") -> str:
+    executable = shutil.which("pdftotext")
+    if executable is None:
+        pytest.skip("Poppler pdftotext is needed for PDF extraction checks")
+    return subprocess.run([executable, option, str(path), "-"], check=True, capture_output=True, text=True).stdout
+
+
+def compact(value: str) -> str:
+    return re.sub(r"\s+", "", value)
+
+
+def page_count(path: Path) -> int:
     return len(re.findall(rb"/Type\s*/Page\b", path.read_bytes()))
 
 
-def make_clip(**overrides: object) -> ClipInfo:
-    payload: dict[str, object] = {
-        "clip_id": "clip-1",
-        "clip_name": "A001_C001.mov",
-        "source_path": "/show/day01/A001_C001.mov",
-        "format_family": FormatFamily.STANDARD,
-        "frame_count": 48,
-        "duration_seconds": 2.0,
-        "fps_num": 24,
-        "fps_den": 1,
-        "width": 1920,
-        "height": 1080,
-        "metadata_raw": {"iso": 800, "scene": "Day01"},
-    }
-    payload.update(overrides)
-    return ClipInfo(**payload)
-
-
-def make_settings(tmp_path: Path, *, layout: str, path_display: str = "basename") -> AppSettings:
-    return AppSettings.from_mapping(
-        {
-            "input": {"paths": ["/show/day01"]},
-            "capture": {"middle_count": 2},
-            "report": {"layout": layout, "path_display": path_display},
-            "output": {"pdf_path": str(tmp_path / "report.pdf")},
-        }
-    )
-
-
-def make_summary() -> BatchSummary:
-    return BatchSummary(
-        total_clips=2,
-        success_count=1,
-        partial_success_count=1,
-        probe_failed_count=0,
-        decode_failed_count=0,
-        skipped_count=0,
-        status=BatchStatus.PARTIAL_SUCCESS,
-    )
-
-
-def make_capture(
-    label: str,
-    image_path: Path,
-    *,
-    ratio: float,
-    frame_index: int,
-    seconds: float,
-    timecode: str,
-) -> CapturePoint:
-    return CapturePoint(
-        label=label,
-        requested_ratio=ratio,
-        requested_frame_index=frame_index,
-        requested_seconds=seconds,
-        actual_frame_index=frame_index,
-        actual_seconds=seconds,
-        actual_timecode=timecode,
-        actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-        image_path_temp=str(image_path),
-        status=CaptureStatus.SUCCESS,
-    )
-
-
-def make_triptych_item(tmp_path: Path, clip_id: str, *, size: tuple[int, int] = (1920, 1080)) -> ReportItem:
-    start_png = tmp_path / f"{clip_id}-start.png"
-    mid_png = tmp_path / f"{clip_id}-mid.png"
-    end_png = tmp_path / f"{clip_id}-end.png"
-    for png_path in (start_png, mid_png, end_png):
-        make_png(png_path, size)
-    captures = (
-        make_capture("Start", start_png, ratio=0.0, frame_index=0, seconds=0.0, timecode="01:00:00:00"),
-        make_capture("Mid1", mid_png, ratio=0.5, frame_index=24, seconds=1.0, timecode="01:00:01:00"),
-        make_capture("End", end_png, ratio=1.0, frame_index=47, seconds=1.958, timecode="01:00:01:23"),
-    )
-    return ReportItem(
-        clip=make_clip(clip_id=clip_id, clip_name=f"{clip_id}.mov"),
-        captures=captures,
-        status=ClipStatus.SUCCESS,
-        adapter_name="ffmpeg",
-    )
-
-
-def test_render_pdf_detail_layout_includes_clip_and_capture_details(tmp_path: Path) -> None:
-    start_png = tmp_path / "start.png"
-    mid_png = tmp_path / "mid.png"
-    make_png(start_png)
-    make_png(mid_png)
-    item = ReportItem(
-        clip=make_clip(start_timecode="01:00:00:00", end_timecode="01:00:01:23"),
-        captures=(
-            CapturePoint(
-                label="Start",
-                requested_ratio=0.0,
-                requested_frame_index=0,
-                requested_seconds=0.0,
-                actual_frame_index=0,
-                actual_seconds=0.0,
-                actual_timecode="01:00:00:00",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(start_png),
-                status=CaptureStatus.SUCCESS,
-            ),
-            CapturePoint(
-                label="Mid1",
-                requested_ratio=0.5,
-                requested_frame_index=24,
-                requested_seconds=1.0,
-                actual_frame_index=24,
-                actual_seconds=1.0,
-                actual_timecode="01:00:01:00",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(mid_png),
-                status=CaptureStatus.SUCCESS,
-                warnings=("fallback tc",),
-            ),
-            CapturePoint(
-                label="End",
-                requested_ratio=1.0,
-                requested_frame_index=47,
-                requested_seconds=1.958,
-                status=CaptureStatus.DECODE_FAILED,
-                errors=(AdapterError(code=AdapterErrorCode.DECODE_FAILED, message="end decode failed"),),
-            ),
-        ),
-        status=ClipStatus.PARTIAL_SUCCESS,
-        adapter_name="ffmpeg",
-        warnings=("clip warning",),
-        errors=(AdapterError(code=AdapterErrorCode.DECODE_FAILED, message="end decode failed"),),
-    )
-    failed_item = ReportItem(
-        clip=make_clip(clip_id="clip-2", clip_name="broken.mov", source_path="/show/day01/broken.mov"),
-        captures=(),
-        status=ClipStatus.PROBE_FAILED,
-        adapter_name="ffmpeg",
-        errors=(AdapterError(code=AdapterErrorCode.PROBE_FAILED, message="probe failed"),),
-    )
-    pdf_path = tmp_path / "detail.pdf"
-
-    render_pdf(pdf_path, make_settings(tmp_path, layout="detail"), (item, failed_item), make_summary())
-
-    text = pdf_text(pdf_path)
-    assert "Layout A / detail" in text
-    assert "A001_C001.mov" in text
-    assert "Source path: A001_C001.mov" in text
-    assert "Requested ratio: 0.500" in text
-    assert "Requested frame: 24" in text
-    assert "Requested time: 1.000s" in text
-    assert "Actual frame: 24" in text
-    assert "Actual time: 1.000s" in text
-    assert "Raw Metadata Summary" in text
-    assert "clip warning" in text
-    assert "Mid1 warning: fallback tc" in text
-    assert "End error: end decode failed" in text
-    assert "Failed / Partial Clips" in text
-    assert "broken.mov [probe_failed]" in text
-
-
-def test_render_pdf_contact_sheet_failed_section_shows_full_path_when_requested(tmp_path: Path) -> None:
-    item = ReportItem(
-        clip=make_clip(),
-        captures=(),
-        status=ClipStatus.DEPENDENCY_MISSING,
-        adapter_name="ffmpeg",
-        errors=(AdapterError(code=AdapterErrorCode.DEPENDENCY_MISSING, message="ffmpeg missing"),),
-    )
-    pdf_path = tmp_path / "contact.pdf"
-
-    render_pdf(pdf_path, make_settings(tmp_path, layout="contact_sheet", path_display="full"), (item,), make_summary())
-
-    text = pdf_text(pdf_path)
-    assert "Layout B / contact_sheet" in text
-    assert "CLIP REVIEW PDF PREVIEW ONLY, NOT COLOR-CRITICAL" in text
-    assert "Original media untouched; PDF uses embedded preview frames only." in text
-    assert "Failed / Partial Clips" in text
-    assert "Source: /show/day01/A001_C001.mov" in text
-    assert "Error: ffmpeg missing" in text
-
-
-def test_render_pdf_contact_sheet_handles_korean_pressure_fixture_and_corrupt_image(tmp_path: Path) -> None:
-    corrupt_png = tmp_path / "corrupt.png"
-    corrupt_png.write_bytes(b"not an image")
-    item = ReportItem(
-        clip=make_clip(
-            clip_name="무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서.mov",
-            source_path="/Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는 상태값/A-CAM_take-2026_05_18_FINAL_v003.mov",
-            codec=None,
-            metadata_raw={
-                "identifier": "A-CAM_take-2026_05_18_FINAL_v003",
-                "검증률": "98.7%",
-                "처리 시간": "2.3초",
-                "row_count": "47,200건",
-                "review_url": "https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_FINAL_v003",
-                "missing_note": "-",
-            },
-        ),
-        captures=(
-            CapturePoint(
-                label="Start",
-                requested_ratio=0.0,
-                requested_frame_index=0,
-                requested_seconds=0.0,
-                actual_frame_index=0,
-                actual_seconds=0.0,
-                actual_timecode="01:00:00:00",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(corrupt_png),
-                status=CaptureStatus.SUCCESS,
-            ),
-            CapturePoint(
-                label="End",
-                requested_ratio=1.0,
-                requested_frame_index=47,
-                requested_seconds=1.958,
-                actual_frame_index=47,
-                actual_seconds=1.958,
-                actual_timecode="01:00:01:23",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                status=CaptureStatus.SUCCESS,
-            ),
-        ),
-        status=ClipStatus.SUCCESS,
-        adapter_name="ffmpeg",
-        warnings=("촬영감독과 스크립터가 동시에 확인해야 하는 상태값 확인 필요",),
-    )
-    settings = AppSettings.from_mapping(
-        {
-            "input": {"paths": ["/Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는 상태값"]},
-            "capture": {"middle_count": 0},
-            "report": {
-                "layout": "contact_sheet",
-                "path_display": "basename",
-                "project_name": "무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서",
-            },
-            "output": {"pdf_path": str(tmp_path / "korean-pressure.pdf")},
-        }
-    )
-    pdf_path = tmp_path / "korean-pressure.pdf"
-
-    render_pdf(pdf_path, settings, (item,), make_summary())
-
-    data = pdf_path.read_bytes()
-    assert data.startswith(b"%PDF")
-    assert b"AppleGothic" in data or b"HYGothic-Medium" in data
-    assert pdf_page_count(pdf_path) == 1
-    assert "preview unavailable" in pdf_text(pdf_path)
-
-
-def test_contact_sheet_renders_start_middle_end_preview_labels(tmp_path: Path) -> None:
-    start_png = tmp_path / "start.png"
-    mid1_png = tmp_path / "mid1.png"
-    mid2_png = tmp_path / "mid2.png"
-    end_png = tmp_path / "end.png"
-    for png_path in (start_png, mid1_png, mid2_png, end_png):
-        make_png(png_path)
-
-    captures = (
-        CapturePoint(
-            label="Start",
-            requested_ratio=0.0,
-            requested_frame_index=0,
-            requested_seconds=0.0,
-            actual_frame_index=0,
-            actual_seconds=0.0,
-            actual_timecode="01:00:00:00",
-            actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-            image_path_temp=str(start_png),
-            status=CaptureStatus.SUCCESS,
-        ),
-        CapturePoint(
-            label="Mid1",
-            requested_ratio=0.33,
-            requested_frame_index=16,
-            requested_seconds=0.666,
-            actual_frame_index=16,
-            actual_seconds=0.666,
-            actual_timecode="01:00:00:16",
-            actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-            image_path_temp=str(mid1_png),
-            status=CaptureStatus.SUCCESS,
-        ),
-        CapturePoint(
-            label="Mid2",
-            requested_ratio=0.66,
-            requested_frame_index=32,
-            requested_seconds=1.333,
-            actual_frame_index=32,
-            actual_seconds=1.333,
-            actual_timecode="01:00:01:08",
-            actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-            image_path_temp=str(mid2_png),
-            status=CaptureStatus.SUCCESS,
-        ),
-        CapturePoint(
-            label="End",
-            requested_ratio=1.0,
-            requested_frame_index=47,
-            requested_seconds=1.958,
-            actual_frame_index=47,
-            actual_seconds=1.958,
-            actual_timecode="01:00:01:23",
-            actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-            image_path_temp=str(end_png),
-            status=CaptureStatus.SUCCESS,
-        ),
-    )
-    item = ReportItem(clip=make_clip(), captures=captures, status=ClipStatus.SUCCESS, adapter_name="ffmpeg")
-    pdf_path = tmp_path / "contact-triptych.pdf"
-
-    render_pdf(pdf_path, make_settings(tmp_path, layout="contact_sheet"), (item,), make_summary())
-
-    text = pdf_text(pdf_path)
-    assert "START" in text
-    assert "MIDDLE" in text
-    assert "END" in text
-    assert "Middle preview: 1 of 2" in text
-    assert _start_middle_end_captures(captures) == (captures[0], captures[2], captures[3])
-
-
-def test_display_image_path_prefers_exported_images_when_available(tmp_path: Path) -> None:
-    temp_png = tmp_path / "temp.png"
-    exported_png = tmp_path / "exported.png"
-    make_png(temp_png)
-    make_png(exported_png)
-    capture = CapturePoint(
-        label="Start",
-        requested_ratio=0.0,
-        requested_frame_index=0,
-        requested_seconds=0.0,
-        actual_frame_index=0,
-        actual_seconds=0.0,
-        actual_timecode="01:00:00:00",
-        actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-        image_path_temp=str(temp_png),
-        image_path_exported=str(exported_png),
-        status=CaptureStatus.SUCCESS,
-    )
-    assert _display_image_path(capture) == exported_png
-
-
-def test_display_path_hidden_mode_preserves_clip_identity() -> None:
-    assert _display_path("/show/day01/A001_C001.mov", PathDisplayMode.HIDDEN) == "hidden (A001_C001.mov)"
-
-
-def test_input_summary_collapses_same_parent_file_inputs(tmp_path: Path) -> None:
-    settings = AppSettings.from_mapping(
-        {
-            "input": {
-                "paths": [
-                    "/Volumes/HOTDRIVE/오븐마루/001_video/260215/R#1/A001_02151557_C002.braw",
-                    "/Volumes/HOTDRIVE/오븐마루/001_video/260215/R#1/A001_02151601_C003.braw",
-                ]
-            },
-            "output": {"pdf_path": str(tmp_path / "report.pdf")},
-        }
-    )
-
-    summary = _input_summary(settings)
-
-    assert summary.endswith("260215/R#1")
-    assert "A001_02151557_C002.braw" not in summary
-    assert "A001_02151601_C003.braw" not in summary
-
-
-def test_input_summary_reports_unrelated_sources_without_full_file_list(tmp_path: Path) -> None:
-    settings = AppSettings.from_mapping(
-        {
-            "input": {
-                "paths": [
-                    "/show/day01/A001.mov",
-                    "/other/day02/B001.mov",
-                    "/third/day03/C001.mov",
-                ]
-            },
-            "output": {"pdf_path": str(tmp_path / "report.pdf")},
-        }
-    )
-
-    summary = _input_summary(settings)
-
-    assert summary == "/show/day01 +2 more sources"
-    assert "A001.mov" not in summary
-    assert "B001.mov" not in summary
-
-
-def test_clips_per_page_tracks_no_crop_preview_page_flow_policy(tmp_path: Path) -> None:
-    start_png = tmp_path / "start.png"
-    mid_png = tmp_path / "mid.png"
-    extra_png = tmp_path / "extra.png"
-    make_png(start_png)
-    make_png(mid_png)
-    make_png(extra_png)
-
-    two_frame_item = ReportItem(
-        clip=make_clip(),
-        captures=(
-            CapturePoint(
-                label="Start",
-                requested_ratio=0.0,
-                requested_frame_index=0,
-                requested_seconds=0.0,
-                actual_frame_index=0,
-                actual_seconds=0.0,
-                actual_timecode="01:00:00:00",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(start_png),
-                status=CaptureStatus.SUCCESS,
-            ),
-            CapturePoint(
-                label="End",
-                requested_ratio=1.0,
-                requested_frame_index=47,
-                requested_seconds=1.958,
-                actual_frame_index=47,
-                actual_seconds=1.958,
-                actual_timecode="01:00:01:23",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(mid_png),
-                status=CaptureStatus.SUCCESS,
-            ),
-        ),
-        status=ClipStatus.SUCCESS,
-        adapter_name="ffmpeg",
-    )
-    four_frame_item = ReportItem(
-        clip=make_clip(),
-        captures=(
-            two_frame_item.captures[0],
-            CapturePoint(
-                label="Mid1",
-                requested_ratio=0.33,
-                requested_frame_index=16,
-                requested_seconds=0.666,
-                actual_frame_index=16,
-                actual_seconds=0.666,
-                actual_timecode="01:00:00:16",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(extra_png),
-                status=CaptureStatus.SUCCESS,
-            ),
-            CapturePoint(
-                label="Mid2",
-                requested_ratio=0.66,
-                requested_frame_index=32,
-                requested_seconds=1.333,
-                actual_frame_index=32,
-                actual_seconds=1.333,
-                actual_timecode="01:00:01:08",
-                actual_timecode_source=TimecodeSource.NATIVE_ADAPTER,
-                image_path_temp=str(extra_png),
-                status=CaptureStatus.SUCCESS,
-            ),
-            two_frame_item.captures[1],
-        ),
-        status=ClipStatus.SUCCESS,
-        adapter_name="ffmpeg",
-    )
-
-    assert _clips_per_page((two_frame_item,)) == 2
-    assert _clips_per_page((four_frame_item,)) == 2
-
-
-def test_contact_sheet_preview_aspect_fit_preserves_wide_frame_width(tmp_path: Path) -> None:
-    wide_png = tmp_path / "wide.png"
-    Image.new("RGB", (1920, 1080), color=(220, 180, 90)).save(wide_png)
-
-    draw_width, draw_height = _fit_image(wide_png, 353.0, 293.0)
-
-    assert round(draw_width, 1) == 353.0
-    assert round(draw_height, 1) == 198.6
-    assert draw_height <= 293.0
-
-
-def test_contact_frame_measurement_uses_actual_image_aspect_ratio(tmp_path: Path) -> None:
-    wide_png = tmp_path / "wide.png"
-    make_png(wide_png, (2000, 1000))
-    capture = make_capture("Start", wide_png, ratio=0.0, frame_index=0, seconds=0.0, timecode="01:00:00:00")
-
-    frame = _measure_contact_frame(capture, "START", 0, 180.0)
-
-    assert frame.aspect_ratio == 2.0
-    assert frame.card_width == 180.0
-    assert frame.image_width == 180.0 - (CONTACT_FRAME_INSET * 2)
-    assert frame.image_height == 78.0
-    assert frame.total_height == frame.caption_height + frame.image_height + CONTACT_FRAME_INSET
-
-
-def test_contact_sheet_page_size_is_a4_portrait_document() -> None:
-    width, height = CONTACT_SHEET_PAGE_SIZE
-
-    assert round(width / height, 4) == 0.7071
-
-
-def test_two_normal_contact_sheet_cards_pack_on_one_page(tmp_path: Path) -> None:
-    items = (
-        make_triptych_item(tmp_path, "clip-1"),
-        make_triptych_item(tmp_path, "clip-2"),
-    )
-    card_width = CONTACT_SHEET_PAGE_SIZE[0] - 48.0
-    usable_height = _contact_usable_height(CONTACT_SHEET_PAGE_SIZE)
-    measurements = tuple(_measure_contact_clip_card(item, card_width, usable_height) for item in items)
-
-    pages = _pack_contact_pages(measurements, usable_height)
-
-    assert len(pages) == 1
-    assert len(pages[0].items) == 2
-
-
-def test_three_normal_portrait_contact_sheet_cards_fit_without_stretching(tmp_path: Path) -> None:
-    items = tuple(make_triptych_item(tmp_path, f"clip-{index}") for index in range(1, 4))
-    pdf_path = tmp_path / "three-clips.pdf"
-
-    render_pdf(pdf_path, make_settings(tmp_path, layout="contact_sheet"), items, make_summary())
-
-    assert pdf_page_count(pdf_path) == 1
-    measurements = tuple(
-        _measure_contact_clip_card(item, CONTACT_SHEET_PAGE_SIZE[0] - 48.0, _contact_usable_height(CONTACT_SHEET_PAGE_SIZE))
-        for item in items
-    )
-    assert measurements[2].height == measurements[0].height
-
-
-def test_mixed_aspect_contact_frames_share_top_with_natural_bottoms(tmp_path: Path) -> None:
-    wide_png = tmp_path / "wide.png"
-    square_png = tmp_path / "square.png"
-    tall_png = tmp_path / "tall.png"
-    make_png(wide_png, (1920, 1080))
-    make_png(square_png, (1000, 1000))
-    make_png(tall_png, (900, 1600))
-    item = ReportItem(
-        clip=make_clip(),
-        captures=(
-            make_capture("Start", wide_png, ratio=0.0, frame_index=0, seconds=0.0, timecode="01:00:00:00"),
-            make_capture("Mid1", square_png, ratio=0.5, frame_index=24, seconds=1.0, timecode="01:00:01:00"),
-            make_capture("End", tall_png, ratio=1.0, frame_index=47, seconds=1.958, timecode="01:00:01:23"),
-        ),
-        status=ClipStatus.SUCCESS,
-        adapter_name="ffmpeg",
-    )
-
-    preview = _measure_contact_preview(item, 580.0)
-
-    assert {frame.caption_height for frame in preview.frames} == {CONTACT_FRAME_CAPTION_HEIGHT}
-    assert len({round(frame.total_height, 3) for frame in preview.frames}) == 3
-    assert preview.height == max(frame.total_height for frame in preview.frames)
-
-
-class FakeCanvas:
-    def __init__(self) -> None:
-        self.images: list[dict[str, object]] = []
-        self.rects: list[dict[str, object]] = []
-        self.round_rects: list[dict[str, object]] = []
-        self.line_widths: list[float] = []
-
-    def setFillColor(self, color: object) -> None:
-        pass
-
-    def setStrokeColor(self, color: object) -> None:
-        pass
-
-    def setFont(self, name: str, size: float) -> None:
-        pass
-
-    def drawString(self, x: float, y: float, text: str) -> None:
-        pass
-
-    def drawRightString(self, x: float, y: float, text: str) -> None:
-        pass
-
-    def drawCentredString(self, x: float, y: float, text: str) -> None:
-        pass
-
-    def setLineWidth(self, width: float) -> None:
-        self.line_widths.append(width)
-
-    def rect(self, x: float, y: float, width: float, height: float, *, fill: int = 0, stroke: int = 1) -> None:
-        self.rects.append({"x": x, "y": y, "width": width, "height": height, "fill": fill, "stroke": stroke})
-
-    def roundRect(self, *args: object, **kwargs: object) -> None:
-        self.round_rects.append({"args": args, "kwargs": kwargs})
-
-    def drawImage(
-        self,
-        image: object,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        *,
-        preserveAspectRatio: bool,
-        mask: str,
-    ) -> None:
-        self.images.append(
-            {
-                "x": x,
-                "y": y,
-                "width": width,
-                "height": height,
-                "preserveAspectRatio": preserveAspectRatio,
-                "mask": mask,
-            }
-        )
-
-
-def test_preview_draw_path_uses_direct_image_and_one_point_border(tmp_path: Path, monkeypatch) -> None:
-    wide_png = tmp_path / "wide.png"
-    make_png(wide_png, (1920, 1080))
-    capture = make_capture("Start", wide_png, ratio=0.0, frame_index=0, seconds=0.0, timecode="01:00:00:00")
-    frame = _measure_contact_frame(capture, "START", 0.0, 180.0)
-    fake = FakeCanvas()
-    monkeypatch.setattr("frameproof.render.pdf_renderer._pdf_image_reader", lambda *args: object())
-
-    _draw_contact_preview_block(fake, frame, 12.0, 200.0)
-
-    assert len(fake.round_rects) == 2
-    assert fake.images == [
-        {
-            "x": 12.0 + CONTACT_FRAME_INSET,
-            "y": 200.0 - frame.caption_height - frame.image_height,
-            "width": 156.0,
-            "height": 87.75,
-            "preserveAspectRatio": False,
-            "mask": "auto",
-        }
-    ]
-    assert 0.8 in fake.line_widths
-
-
-def test_triptych_draws_mixed_aspect_images_from_same_top_y(tmp_path: Path, monkeypatch) -> None:
-    item = ReportItem(
-        clip=make_clip(),
-        captures=(
-            make_capture("Start", tmp_path / "wide.png", ratio=0.0, frame_index=0, seconds=0.0, timecode="01:00:00:00"),
-            make_capture("Mid1", tmp_path / "square.png", ratio=0.5, frame_index=24, seconds=1.0, timecode="01:00:01:00"),
-            make_capture("End", tmp_path / "tall.png", ratio=1.0, frame_index=47, seconds=1.958, timecode="01:00:01:23"),
-        ),
-        status=ClipStatus.SUCCESS,
-        adapter_name="ffmpeg",
-    )
-    make_png(Path(item.captures[0].image_path_temp), (1920, 1080))
-    make_png(Path(item.captures[1].image_path_temp), (1000, 1000))
-    make_png(Path(item.captures[2].image_path_temp), (900, 1600))
-    preview = _measure_contact_preview(item, 580.0)
-    fake = FakeCanvas()
-    monkeypatch.setattr("frameproof.render.pdf_renderer._pdf_image_reader", lambda *args: object())
-
-    _draw_contact_preview_triptych(fake, preview, 20.0, 300.0)
-
-    image_tops = {round(image["y"] + image["height"], 3) for image in fake.images}
-    image_bottoms = {round(image["y"], 3) for image in fake.images}
-    assert image_tops == {274.0}
-    assert len(image_bottoms) == 3
+def assert_bounds(path: Path):
+    text = pdf_text(path, "-bbox")
+    pages = ET.fromstring(text).findall(".//{*}page")
+    for page in pages:
+        width, height = float(page.attrib["width"]), float(page.attrib["height"])
+        for word in page.findall(".//{*}word"):
+            x0, x1, y0, y1 = [float(word.attrib[key]) for key in ("xMin", "xMax", "yMin", "yMax")]
+            assert 39 <= x0 <= x1 <= width - 39, word.text
+            assert 12 <= y0 <= y1 <= height - 12, word.text
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+@pytest.mark.parametrize("count", [9, 10])
+def test_three_complete_clips_per_page_including_first_and_partial_last(tmp_path, density, layout, count):
+    items = density["ten-clips"][:count]
+    before = [asdict(item) for item in items]
+    path = tmp_path / "DEBUG-DATA-density.pdf"
+    renderer.render_pdf(path, settings(path, layout=layout), iter(items), build_batch_summary(items))
+    text = pdf_text(path)
+    pages = text.split("\f")[:-1]
+    assert page_count(path) == len(pages) == (count + 2) // 3
+    assert "부록" not in text and "이슈 색인" not in text and "RAW-ONLY" not in text
+    for index, page in enumerate(pages):
+        expected = items[index * 3:index * 3 + 3]
+        assert re.findall(r"ID (DEBUG-DENSITY-\d+)", page) == [item.clip.clip_id for item in expected]
+        assert all(compact(item.clip.clip_name) in compact(page) for item in expected)
+        actual_tcs = Counter(c.actual_timecode for item in expected for c in item.captures if c.actual_timecode)
+        assert all(page.count(tc) >= amount for tc, amount in actual_tcs.items())
+        for value in ["30000/1001", "29.970 fps", "ProRes 422 HQ", "47,200,000 bytes", "카메라 제작사", "시네마 모델",
+                      "A-CAM", "A001", "01:00:00;00", "01:00:02;09", "아니요 / false"]:
+            assert compact(value) in compact(page)
+        assert f"클립 {index * 3 + 1:03d} / 클립 {min(index * 3 + 3, count):03d}" in page or len(expected) == 1
+    assert "start_timecode_missing" in text and "시작 타임코드 수동 확인 필요" in text
+    assert [asdict(item) for item in items] == before
+    assert_bounds(path)
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+def test_pdf_capture_order_positions_and_states_match_manifest_including_zero_capture(tmp_path, cases, layout):
+    items = cases["capture-and-image-edges"]
+    path = tmp_path / "DEBUG-DATA-sequence.pdf"
+    renderer.render_pdf(path, settings(path, layout=layout), items, build_batch_summary(items))
+    text = pdf_text(path)
+    identities = list(re.finditer(r"ID (clip-\d+)", text))
+    observed = []
+    for index, match in enumerate(identities):
+        item = items[index]
+        segment = text[match.end():identities[index + 1].start() if index + 1 < len(identities) else len(text)]
+        if not item.captures:
+            assert "캡처 지점: 0" in segment
+            observed.append((match[1], ""))
+            continue
+        timing = segment.split("캡처 / 상태", 1)[1]
+        labels = re.findall(r"^(Start|Mid[123]|End)(?:\s+(?:정상|실패|미완|중복))?(?=\s|$)", timing, re.MULTILINE)
+        assert labels[:len(item.captures)] == [c.label for c in item.captures]
+        observed.extend((match[1], label) for label in labels[:len(item.captures)])
+        # Real actual/requested values are deliberately different in the source.
+        for capture in item.captures:
+            if capture.actual_seconds is not None:
+                assert f"{capture.actual_seconds:.3f} s" in timing
+            if capture.requested_seconds is not None:
+                assert f"{capture.requested_seconds:.3f} s" in timing
+            if capture.actual_timecode:
+                assert capture.actual_timecode in timing
+        if item.captures[-1].duplicate_of:
+            assert "중복" in timing and "Start" in timing
+    assert observed == [(row["clip_id"], row["capture_label"]) for row in build_manifest_rows(items)]
+    assert "미리보기 없음" in text and "이미지 읽기 실패" in text
+    assert "중간 캡처 미설정" in text or layout is ReportLayout.CLIP_DETAIL
+    assert_bounds(path)
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+def test_bounded_main_body_pressure_keeps_failures_messages_zero_and_korean(tmp_path, density, layout):
+    items = density["pressure-no-companions"]
+    original = [asdict(item) for item in items]
+    path = tmp_path / "DEBUG-DATA-pressure.pdf"
+    config = settings(path, layout=layout)
+    config = replace(config, output=replace(config.output, write_csv=False, write_json=False))
+    renderer.render_pdf(path, config, items, build_batch_summary(items))
+    text = pdf_text(path)
+    flattened = compact(text)
+    assert page_count(path) == 4
+    for expected in [TITLE, PHRASE, IDENTIFIER, "IDENTITY-FINAL-SUFFIX.mov", "decode_failed", "오류 [Mid2]",
+                     "프레임 디코딩 실패", "경고 [Mid2]", "외 3건", "외 1건", "partial_success", "probe_failed",
+                     "98.7%", "2.3초", "47,200건", "0 bytes", "0.000 s", "아니요 / false", "캡처 지점: 0",
+                     "논리 클립 촬영본 A", "분할 2개", '<b>literal message</b>', "축약"]:
+        assert compact(expected) in flattened, expected
+    for omitted in ["RAW-ONLY", "OMITTED-STRUCTURED-DETAIL", "/private/secret", "OMITTED-MESSAGE-TAIL", "CSV", "JSON", "부록"]:
+        assert omitted not in text
+    assert [asdict(item) for item in items] == original
+    assert_bounds(path)
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+@pytest.mark.parametrize("summary", [True, False])
+@pytest.mark.parametrize("emphasis", [True, False])
+def test_flags_keep_inline_failures_and_never_add_pages(tmp_path, density, layout, summary, emphasis):
+    items = density["pressure-no-companions"][:6]
+    path = tmp_path / "DEBUG-DATA-flags.pdf"
+    config = settings(path, layout=layout, include_summary_page=summary, include_failed_section=emphasis)
+    renderer.render_pdf(path, config, items, build_batch_summary(items))
+    text = pdf_text(path)
+    assert page_count(path) == 2
+    assert compact(TITLE) in compact(text)
+    assert "DEBUG-DENSITY-001" in text.split("\f")[0]
+    assert "오류 [Mid2] decode_failed" in text
+    assert "partial_success" in text
+    assert ("배치 partial_success" in text) is summary
+    assert ("| 확인 필요" in text) is emphasis
+    assert "부록" not in text and "이슈 색인" not in text
+    assert_bounds(path)
+
+
+@pytest.mark.parametrize("mode", list(PathDisplayMode))
+@pytest.mark.parametrize("layout", list(ReportLayout))
+def test_path_policy_precedes_abbreviation_and_covers_message_references_without_mutation(tmp_path, density, mode, layout):
+    current = density["nine-clips"][0]
+    path = tmp_path / "DEBUG-DATA-path-policy.pdf"
+    source = "/private/secret/clip.mov"
+    exported = current.captures[0].image_path_exported
+    current = replace(current, clip=replace(current.clip, source_path=source),
+                      warnings=(f"미디어 경로 {source}; 스틸 {exported}",))
+    before = asdict(current)
+    renderer.render_pdf(path, settings(path, layout=layout, path_display=mode), (current,), build_batch_summary((current,)))
+    text = pdf_text(path)
+    if mode is PathDisplayMode.FULL:
+        assert source in text
+    else:
+        assert "/private/secret" not in text
+        assert str(Path(exported).parent) not in text
+    assert ("hidden (clip.mov)" in text) is (mode is PathDisplayMode.HIDDEN)
+    assert "clip.mov" in text
+    assert current.captures[0].image_path_temp not in text
+    assert before == asdict(current)
+    assert_bounds(path)
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+def test_superseded_raw_and_detail_payloads_are_not_embedded(tmp_path, cases, layout):
+    items = cases["issues-overflow"][:3]
+    path = tmp_path / "DEBUG-DATA-compact-omissions.pdf"
+    renderer.render_pdf(path, settings(path, layout=layout), items, build_batch_summary(items))
+    text = pdf_text(path)
+    assert page_count(path) == 1
+    assert "decode_failed" in text and "축약" in text and "외 " in text
+    for sentinel in ["LONG-RAW-FINAL-SENTINEL", "ERROR-DETAIL-END", "RAW-COLLECTION-END", "raw-key-14", "부록", "원시 메타데이터"]:
+        assert sentinel not in text
+    assert "경고가 있는 클립: 3" in text
+    assert_bounds(path)
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+def test_empty_report_and_provided_summary_mismatch_remain_explicit(tmp_path, layout):
+    path = tmp_path / "DEBUG-DATA-empty.pdf"
+    summary = BatchSummary(99, 97, 1, 0, 1, 0, BatchStatus.PARTIAL_SUCCESS)
+    renderer.render_pdf(path, settings(path, layout=layout), (), summary)
+    text = compact(pdf_text(path))
+    assert "보고서에포함할클립이없습니다." in text
+    assert "수록범위가다릅니다" in text
+    assert "99" in text and "97" in text
+    assert page_count(path) == 1
+    assert_bounds(path)
+
+
+def test_image_precedence_orientation_fit_and_corrupt_placeholder(tmp_path, cases):
+    renderer._register_fonts()
+    current = cases["korean-full-evidence"][0]
+    exported = Path(current.captures[0].image_path_exported)
+    assert renderer._display_image_path(current.captures[0]) == exported
+    image, reason = renderer._preview(current.captures[0], 150, 150, renderer._styles())
+    assert reason is None
+    assert image.drawWidth / image.drawHeight == pytest.approx(16 / 9)
+    rotated = Path(current.captures[3].image_path_exported)
+    assert renderer._fit_image(rotated, 150, 150) == pytest.approx((75, 150))
+    broken = replace(current.captures[0], image_path_exported=current.captures[0].image_path_temp)
+    image, reason = renderer._preview(broken, 150, 150, renderer._styles())
+    assert reason == "이미지 읽기 실패"
+    assert broken.status is CaptureStatus.SUCCESS
+    temp_only = replace(current.captures[0], image_path_exported=None, image_path_temp=str(exported))
+    assert renderer._display_image_path(temp_only) == exported
+
+
+def test_representative_middle_selection_and_ties_keep_tuple_order(cases):
+    no_mid = cases["capture-and-image-edges"][0]
+    assert renderer._start_middle_end_captures(no_mid.captures)[1] is None
+    full = cases["korean-full-evidence"][0]
+    assert renderer._start_middle_end_captures(full.captures)[1].label == "Mid2"
+    two = cases["capture-and-image-edges"][2]
+    caps = list(two.captures)
+    caps[1] = replace(caps[1], requested_ratio=.25)
+    caps[2] = replace(caps[2], requested_ratio=.75)
+    assert renderer._start_middle_end_captures(tuple(caps))[1].label == "Mid1"
+
+
+def test_dispatch_keeps_public_api_and_output_layout(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(renderer, "render_contact_sheet_pdf", lambda *args: calls.append("contact"))
+    monkeypatch.setattr(renderer, "render_detail_pdf", lambda *args: calls.append("detail"))
+    path = tmp_path / "debug.pdf"
+    for layout in ReportLayout:
+        renderer.render_pdf(path, settings(path, layout=layout), (), build_batch_summary(()))
+    assert calls == ["contact", "detail"]
+
+
+@pytest.mark.parametrize("layout", list(ReportLayout))
+def test_bundled_fonts_are_embedded_and_page_dimensions_are_preserved(tmp_path, density, layout):
+    if shutil.which("pdffonts") is None:
+        pytest.skip("Poppler pdffonts is needed for embedding inspection")
+    path = tmp_path / "DEBUG-DATA-fonts.pdf"
+    items = density["nine-clips"][:3]
+    renderer.render_pdf(path, settings(path, layout=layout), items, build_batch_summary(items))
+    fonts = subprocess.run(["pdffonts", str(path)], check=True, capture_output=True, text=True).stdout
+    lines = [line for line in fonts.splitlines() if "DataHandlerSans" in line]
+    assert len(lines) >= 2
+    assert all("yes yes yes" in line for line in lines)
+    info = subprocess.run(["pdfinfo", str(path)], check=True, text=True, capture_output=True).stdout
+    assert TITLE in info
+    assert ("595.276 x 841.89" if layout is ReportLayout.CONTACT_SHEET else "792 x 612") in info
+    for name in ["DataHandlerSans-Regular.ttf", "DataHandlerSans-Bold.ttf", "OFL.txt"]:
+        assert (renderer.FONT_DIRECTORY / name).is_file()
+    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}", pdf_text(path))

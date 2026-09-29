@@ -1,29 +1,5 @@
-# AGENTS.md - Repo Delivery Orchestrator
+# DataHelper project guidance
 
-This repository uses Hermes as the delivery orchestrator.
+For an explicit Hermes staged delivery, Hermes coordinates Plan → Implement → QA → Fix → Re-QA and advances only after a recorded QA pass. Use `docs/stage.md` and the stage reports under `docs/reports/` as the durable state. Keep development and QA roles separate, and use a fresh session for each stage run.
 
-## Role Model
-
-- Hermes is the controller, launcher, gate keeper, reporter, and recovery manager.
-- Dev lane workers run Plan / Implement / Fix only.
-- QA lane workers validate only and must return explicit PASS or FAIL.
-
-## Hard Rules
-
-- Every Plan / Implement / QA / Fix run must use a fresh Codex session.
-- Dev and QA must never rely on prior hidden chat context.
-- Repository markdown files are the only durable workflow memory.
-- QA must not silently fix implementation.
-- No stage may advance without explicit QA PASS.
-- Missing reports block advancement.
-
-## Core State Files
-
-- `docs/stage.md`
-- `docs/reports/status/current-status.md`
-- `docs/reports/dev/stage-XX-handoff.md`
-- `docs/reports/qa/stage-XX-qa-report.md`
-
-## Allowed Flow
-
-Plan -> Implement -> QA -> Fix if needed -> Re-QA -> next stage only after QA PASS
+For ordinary edits, reviews, and questions, follow the user's task directly. Read relevant files and run focused verification without creating stage reports or a new session unless the task calls for the Hermes workflow.
