@@ -266,3 +266,43 @@ def test_bundled_fonts_are_embedded_and_page_dimensions_are_preserved(tmp_path, 
     for name in ["DataHandlerSans-Regular.ttf", "DataHandlerSans-Bold.ttf", "OFL.txt"]:
         assert (renderer.FONT_DIRECTORY / name).is_file()
     assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4}", pdf_text(path))
+
+
+def test_preview_rotates_exif_images_and_reuses_one_encode_per_file(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "rotated.jpg"
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.new("RGB", (800, 400), "#667d82").save(source, exif=exif)
+    renderer._encoded_preview.cache_clear()
+    capture = replace(make_cases(tmp_path / "images")["korean-full-evidence"][0].captures[0],
+                      image_path_exported=str(source))
+
+    first, _ = renderer._preview(capture, 150, 150, renderer._styles())
+    second, _ = renderer._preview(capture, 150, 150, renderer._styles())
+
+    assert (first.drawWidth, first.drawHeight) == pytest.approx((75, 150))
+    assert renderer._encoded_preview.cache_info().hits == 1
+    data, full_size = renderer._encoded_preview(str(source), source.stat().st_mtime_ns, source.stat().st_size, 300)
+    assert full_size == (400, 800)
+    with Image.open(__import__("io").BytesIO(data)) as encoded:
+        assert encoded.height > encoded.width
+    assert second.drawWidth == first.drawWidth
+
+
+def test_failed_render_leaves_previous_report_and_no_partial_files(tmp_path, monkeypatch, density):
+    items = next(iter(density.values()))
+    path = tmp_path / "report.pdf"
+    path.write_bytes(b"previous report")
+
+    def explode(document, *_args, **_kwargs):
+        Path(document.filename).write_bytes(b"%PDF-1.4 truncated")
+        raise RuntimeError("render interrupted")
+
+    monkeypatch.setattr(renderer._ReportDocument, "build", explode)
+    with pytest.raises(RuntimeError):
+        renderer.render_pdf(path, settings(path), items, build_batch_summary(items))
+
+    assert path.read_bytes() == b"previous report"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["report.pdf"]

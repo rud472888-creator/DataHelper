@@ -160,3 +160,53 @@ def test_with_exported_image_paths_updates_matching_capture_labels() -> None:
 
     assert updated.captures[0].image_path_exported == "/exports/start.png"
     assert updated.captures[1].image_path_exported is None
+
+
+def test_later_captures_do_not_reuse_the_container_start_timecode() -> None:
+    probe = ProbeResult(
+        ok=True,
+        adapter_name="ffmpeg",
+        format_family=FormatFamily.STANDARD,
+        # Unparseable start timecode: the calculation cannot run.
+        clip=make_clip(start_timecode="01:00:00.000"),
+        status=ClipStatus.SUCCESS,
+    )
+    captures = (
+        CaptureResult(label="Start", requested_ratio=0.0, requested_frame_index=0,
+                      actual_frame_index=0, actual_seconds=0.0, status=CaptureStatus.SUCCESS),
+        CaptureResult(label="End", requested_ratio=1.0, requested_frame_index=23,
+                      actual_frame_index=23, actual_seconds=23 / 24, status=CaptureStatus.SUCCESS),
+    )
+
+    item = build_report_item(probe, captures)
+
+    assert item.captures[0].actual_timecode == "01:00:00.000"
+    assert item.captures[0].actual_timecode_source.value == "container_metadata"
+    assert item.captures[1].actual_timecode == "+00:00:00.958"
+    assert item.captures[1].actual_timecode_source.value == "elapsed_fallback"
+
+
+def test_build_report_item_calculates_missing_end_timecode() -> None:
+    probe = ProbeResult(
+        ok=True,
+        adapter_name="ffmpeg",
+        format_family=FormatFamily.STANDARD,
+        clip=make_clip(start_timecode="00:59:59;00", frame_count=90, fps_num=30000, fps_den=1001, tc_drop_frame=True),
+        status=ClipStatus.SUCCESS,
+    )
+
+    item = build_report_item(probe, ())
+
+    assert item.clip.end_timecode == "01:00:01;29 (calculated)"
+
+
+def test_build_report_item_keeps_adapter_end_timecode() -> None:
+    probe = ProbeResult(
+        ok=True,
+        adapter_name="braw_adapter",
+        format_family=FormatFamily.STANDARD,
+        clip=make_clip(start_timecode="01:00:00:00", end_timecode="01:00:00:23"),
+        status=ClipStatus.SUCCESS,
+    )
+
+    assert build_report_item(probe, ()).clip.end_timecode == "01:00:00:23"

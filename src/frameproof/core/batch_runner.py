@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Event
 from types import TracebackType
 
+from frameproof.adapters.base import CaptureAdapter
 from frameproof.config.settings import AppSettings, OutputSettings
 from frameproof.core.adapter_resolver import AdapterSelection, resolve_adapter
 from frameproof.core.capture_planner import build_capture_plan
@@ -107,7 +108,10 @@ def run_batch(
     progress(BatchStageEvent(event_type="stage_completed", stage="dependencies", message="Dependency check complete"))
 
     candidates = group_clip_candidates(scanned_paths)
-    selections = tuple(resolve_adapter(candidate, settings.adapters) for candidate in candidates)
+    adapter_cache: dict[str, CaptureAdapter] = {}
+    selections = tuple(
+        resolve_adapter(candidate, settings.adapters, adapter_cache=adapter_cache) for candidate in candidates
+    )
     rows = {
         selection.candidate.candidate_id: _build_initial_row(selection)
         for selection in selections

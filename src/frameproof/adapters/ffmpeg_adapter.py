@@ -48,6 +48,7 @@ class FFmpegAdapter:
     def __init__(self, settings: AdapterSettings) -> None:
         self._settings = settings
         self._inspector = DependencyInspector(settings)
+        self._probe_cache: dict[str, Mapping[str, object]] = {}
 
     def is_available(self) -> AdapterDependencyState:
         return self._availability().state
@@ -85,6 +86,8 @@ class FFmpegAdapter:
             clip, warnings, status = _build_clip_info(candidate, ffprobe_payload, mediainfo_payload)
         except ValueError as exc:
             return _probe_failure(candidate, str(exc), AdapterErrorCode.PROBE_FAILED, ffprobe_payload, mediainfo_payload)
+
+        self._probe_cache[candidate.source_path] = ffprobe_payload
 
         return ProbeResult(
             ok=True,
@@ -229,13 +232,17 @@ class FFmpegAdapter:
         return tuple(results)
 
     def _capture_context(self, candidate: ClipCandidate) -> CaptureContext:
-        ffprobe = self._inspector.ffprobe()
-        if ffprobe.resolved_path is None:
-            return CaptureContext(fps_num=None, fps_den=None)
-        try:
-            payload = self._probe_payload(ffprobe.resolved_path, candidate)
-        except (subprocess.SubprocessError, json.JSONDecodeError):
-            return CaptureContext(fps_num=None, fps_den=None)
+        # probe() normally ran moments ago for this candidate; reuse its payload
+        # instead of launching ffprobe a second time per clip.
+        payload = self._probe_cache.pop(candidate.source_path, None)
+        if payload is None:
+            ffprobe = self._inspector.ffprobe()
+            if ffprobe.resolved_path is None:
+                return CaptureContext(fps_num=None, fps_den=None)
+            try:
+                payload = self._probe_payload(ffprobe.resolved_path, candidate)
+            except (subprocess.SubprocessError, json.JSONDecodeError):
+                return CaptureContext(fps_num=None, fps_den=None)
 
         streams = payload.get("streams")
         if not isinstance(streams, list):
@@ -444,12 +451,12 @@ def _build_clip_info(
 
     mediainfo_track = _extract_mediainfo_video_track(mediainfo_payload)
     fps_num, fps_den = _parse_frame_rate(video_stream, mediainfo_track)
-    duration_seconds = _first_float(
+    duration_seconds = _first_positive_float(
         video_stream.get("duration"),
         format_section.get("duration"),
         mediainfo_track.get("Duration") if mediainfo_track is not None else None,
     )
-    frame_count = _first_int(
+    frame_count = _first_positive_int(
         video_stream.get("nb_frames"),
         _nested_get(video_stream, "tags", "NUMBER_OF_FRAMES"),
         mediainfo_track.get("FrameCount") if mediainfo_track is not None else None,
@@ -458,13 +465,17 @@ def _build_clip_info(
         frame_count = max(round(duration_seconds * fps_num / fps_den), 1)
 
     start_timecode = _first_text(
-        _nested_get(video_stream, "tags", "timecode"),
-        _nested_get(format_section, "tags", "timecode"),
-        mediainfo_track.get("TimeCode_FirstFrame") if mediainfo_track is not None else None,
-        mediainfo_track.get("TimeCode_Start") if mediainfo_track is not None else None,
+        _timecode_tag(video_stream),
+        _timecode_tag(format_section),
+        *(_timecode_tag(stream) for stream in streams if isinstance(stream, dict) and stream is not video_stream),
+        *(
+            track.get(key)
+            for track in _mediainfo_timecode_tracks(mediainfo_payload, mediainfo_track)
+            for key in ("TimeCode_FirstFrame", "TimeCode_Start")
+        ),
     )
-    width = _first_int(video_stream.get("width"), mediainfo_track.get("Width") if mediainfo_track is not None else None)
-    height = _first_int(video_stream.get("height"), mediainfo_track.get("Height") if mediainfo_track is not None else None)
+    width = _first_positive_int(video_stream.get("width"), mediainfo_track.get("Width") if mediainfo_track is not None else None)
+    height = _first_positive_int(video_stream.get("height"), mediainfo_track.get("Height") if mediainfo_track is not None else None)
 
     if frame_count is None and duration_seconds is None:
         raise ValueError("No duration or frame count metadata was available")
@@ -526,12 +537,39 @@ def _needs_mediainfo_fallback(payload: Mapping[str, object]) -> bool:
     if video_stream is None:
         return True
 
-    if video_stream.get("nb_frames") in (None, "N/A"):
+    if _first_positive_int(video_stream.get("nb_frames")) is None:
         return True
-    if _first_int(video_stream.get("width")) is None or _first_int(video_stream.get("height")) is None:
+    if _first_positive_int(video_stream.get("width")) is None or _first_positive_int(video_stream.get("height")) is None:
         return True
     fps_num, fps_den = _parse_frame_rate(video_stream, None)
     return fps_num is None or fps_den is None
+
+
+def _timecode_tag(section: Mapping[str, object]) -> object | None:
+    tags = section.get("tags")
+    if not isinstance(tags, Mapping):
+        return None
+    # MOV/MXF write "timecode"; Matroska writes "TIMECODE".
+    return next(
+        (value for key, value in tags.items() if isinstance(key, str) and key.lower() == "timecode"),
+        None,
+    )
+
+
+def _mediainfo_timecode_tracks(
+    payload: Mapping[str, object] | None,
+    video_track: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any], ...]:
+    tracks: list[Mapping[str, Any]] = [video_track] if video_track is not None else []
+    media = payload.get("media") if payload is not None else None
+    track_list = media.get("track") if isinstance(media, dict) else None
+    if isinstance(track_list, list):
+        # MediaInfo reports QuickTime/MXF timecode tracks with @type "Other".
+        tracks.extend(
+            track for track in track_list
+            if isinstance(track, dict) and str(track.get("@type", "")).lower() == "other"
+        )
+    return tuple(tracks)
 
 
 def _extract_mediainfo_video_track(payload: Mapping[str, object] | None) -> Mapping[str, Any] | None:
@@ -564,10 +602,23 @@ def _parse_frame_rate(
             return parsed
         parsed_float = _first_float(mediainfo_track.get("FrameRate"))
         if parsed_float is not None and parsed_float > 0:
-            thousand = 1000
-            return round(parsed_float * thousand), thousand
+            return _rational_frame_rate(parsed_float)
 
     return None, None
+
+
+_NTSC_BASE_RATES = (24, 30, 48, 60, 120)
+
+
+def _rational_frame_rate(value: float) -> tuple[int, int]:
+    # "29.970" must become 30000/1001 so drop-frame timecode is recognized.
+    for base in _NTSC_BASE_RATES:
+        if abs(value - base * 1000 / 1001) < 0.005:
+            return base * 1000, 1001
+    if abs(value - round(value)) < 0.005:
+        return round(value), 1
+    thousand = 1000
+    return round(value * thousand), thousand
 
 
 def _parse_fraction(value: object, denominator: object | None = None) -> tuple[int, int] | None:
@@ -575,14 +626,12 @@ def _parse_fraction(value: object, denominator: object | None = None) -> tuple[i
         left, right = value.split("/", 1)
         left_int = _first_int(left)
         right_int = _first_int(right)
-        if left_int is not None and right_int not in (None, 0):
-            assert right_int is not None
+        if left_int is not None and right_int is not None and left_int > 0 and right_int > 0:
             return left_int, right_int
     if denominator is not None:
         left_int = _first_int(value)
         right_int = _first_int(denominator)
-        if left_int is not None and right_int not in (None, 0):
-            assert right_int is not None
+        if left_int is not None and right_int is not None and left_int > 0 and right_int > 0:
             return left_int, right_int
     return None
 
@@ -618,6 +667,14 @@ def _first_int(*values: object) -> int | None:
         except ValueError:
             continue
     return None
+
+
+def _first_positive_int(*values: object) -> int | None:
+    return _first_int(*(value for value in values if (parsed := _first_int(value)) is not None and parsed > 0))
+
+
+def _first_positive_float(*values: object) -> float | None:
+    return _first_float(*(value for value in values if (parsed := _first_float(value)) is not None and parsed > 0))
 
 
 def _first_float(*values: object) -> float | None:

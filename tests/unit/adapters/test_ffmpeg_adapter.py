@@ -234,3 +234,127 @@ def test_capture_uses_fast_seek_seconds_for_frame_index_requests(
         "scale=min(960\\,iw):-2",
         str(tmp_path / "02_mid1.png"),
     ]
+
+
+def _available(name: str) -> DependencyRecord:
+    return DependencyRecord(
+        name=name,
+        state=AdapterDependencyState.AVAILABLE,
+        configured_path=name,
+        resolved_path=f"/usr/bin/{name}",
+    )
+
+
+def _build(ffprobe_payload: dict[str, object], mediainfo_payload: dict[str, object] | None = None):  # type: ignore[no-untyped-def]
+    from frameproof.adapters.ffmpeg_adapter import _build_clip_info
+
+    return _build_clip_info(make_candidate(), ffprobe_payload, mediainfo_payload)
+
+
+def test_build_clip_info_reads_uppercase_matroska_timecode_tag() -> None:
+    clip, warnings, _status = _build(
+        {
+            "format": {"format_name": "matroska,webm", "duration": "4.0", "tags": {"TIMECODE": "10:00:00:00"}},
+            "streams": [{"codec_type": "video", "avg_frame_rate": "25/1", "width": 1920, "height": 1080}],
+        }
+    )
+
+    assert clip.start_timecode == "10:00:00:00"
+    assert "start_timecode_missing" not in warnings
+
+
+def test_build_clip_info_reads_timecode_from_quicktime_tmcd_stream_and_mediainfo_other_track() -> None:
+    clip, _warnings, _status = _build(
+        {
+            "format": {"format_name": "mov", "duration": "2.0"},
+            "streams": [
+                {"codec_type": "video", "avg_frame_rate": "24/1", "width": 1920, "height": 1080, "nb_frames": "48"},
+                {"codec_type": "data", "codec_tag_string": "tmcd", "tags": {"timecode": "01:02:03:04"}},
+            ],
+        }
+    )
+    assert clip.start_timecode == "01:02:03:04"
+
+    clip, _warnings, _status = _build(
+        {
+            "format": {"format_name": "mxf", "duration": "2.0"},
+            "streams": [{"codec_type": "video", "avg_frame_rate": "24/1", "width": 1920, "height": 1080}],
+        },
+        {"media": {"track": [{"@type": "Video"}, {"@type": "Other", "TimeCode_FirstFrame": "05:00:00:00"}]}},
+    )
+    assert clip.start_timecode == "05:00:00:00"
+
+
+def test_build_clip_info_treats_zero_frame_count_and_rate_as_unknown() -> None:
+    clip, _warnings, status = _build(
+        {
+            "format": {"format_name": "mxf", "duration": "2.0"},
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "avg_frame_rate": "0/0",
+                    "r_frame_rate": "25/1",
+                    "width": 1920,
+                    "height": 1080,
+                    "nb_frames": "0",
+                }
+            ],
+        }
+    )
+
+    assert (clip.fps_num, clip.fps_den) == (25, 1)
+    assert clip.frame_count == 50
+    assert status is ClipStatus.SUCCESS
+
+
+def test_build_clip_info_snaps_mediainfo_float_rate_to_ntsc_rational() -> None:
+    clip, _warnings, _status = _build(
+        {
+            "format": {"format_name": "mxf", "duration": "1.001"},
+            "streams": [{"codec_type": "video", "avg_frame_rate": "0/0", "width": 1920, "height": 1080}],
+        },
+        {"media": {"track": [{"@type": "Video", "FrameRate": "29.970"}]}},
+    )
+
+    assert (clip.fps_num, clip.fps_den) == (30000, 1001)
+
+
+def test_capture_reuses_probe_payload_instead_of_running_ffprobe_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = FFmpegAdapter(AdapterSettings())
+    probe_calls: list[str] = []
+
+    def fake_probe_payload(_ffprobe_path: str, candidate: ClipCandidate) -> dict[str, object]:
+        probe_calls.append(candidate.source_path)
+        return {
+            "format": {"format_name": "mov", "duration": "2.0"},
+            "streams": [
+                {"codec_type": "video", "avg_frame_rate": "24/1", "width": 1280, "height": 720, "nb_frames": "48"}
+            ],
+        }
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"png")
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(adapter._inspector, "ffprobe", lambda: _available("ffprobe"))
+    monkeypatch.setattr(adapter._inspector, "ffmpeg", lambda: _available("ffmpeg"))
+    monkeypatch.setattr(adapter, "_probe_payload", fake_probe_payload)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    plan = CapturePlan(
+        clip_id="candidate-0001",
+        requests=(
+            CaptureRequest(label="Start", requested_ratio=0.0, requested_frame_index=0),
+            CaptureRequest(label="End", requested_ratio=1.0, requested_frame_index=47),
+        ),
+        middle_count=0,
+        used_frame_count=True,
+    )
+
+    assert adapter.probe(make_candidate()).ok is True
+    results = adapter.capture(make_candidate(), plan, profile=CaptureProfile(name="preview"), staging_dir=tmp_path)
+
+    assert probe_calls == ["/clips/A001_C001.mov"]
+    assert results[1].actual_seconds == pytest.approx(47 / 24)

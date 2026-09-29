@@ -237,3 +237,42 @@ def test_cli_mixed_batch_continues_after_probe_failure(
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["summary"]["total_clips"] == 2
     assert {clip["status"] for clip in payload["clips"]} == {"success", "probe_failed"}
+
+
+@pytest.mark.parametrize(
+    ("container", "timecode", "expected_start", "expected_end"),
+    (
+        # 29.97 DF across a non-tenth minute boundary (frames ;00 and ;01 are dropped).
+        ("mov", "00:59:58;00", "00:59:58;00 (calculated)", "01:00:00;29 (calculated)"),
+        ("mp4", "10:00:00:00", "10:00:00:00 (calculated)", "10:00:02:29 (calculated)"),
+    ),
+)
+def test_cli_reports_capture_timecodes_from_container_start_timecode(
+    tmp_path: Path,
+    container: str,
+    timecode: str,
+    expected_start: str,
+    expected_end: str,
+) -> None:
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg/ffprobe are not available in this environment")
+    rate = "30000/1001" if ";" in timecode else "30"
+    clip_path = tmp_path / f"tc.{container}"
+    subprocess.run(
+        [shutil.which("ffmpeg") or "ffmpeg", "-y", "-f", "lavfi", "-i", f"testsrc=size=160x90:rate={rate}",
+         "-frames:v", "90", "-timecode", timecode, str(clip_path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    json_path = tmp_path / "report.json"
+
+    result = run_cli("--input", str(clip_path), "--middle-count", "0", "--output", str(tmp_path / "report.pdf"),
+                     "--json", str(json_path))
+
+    assert result.returncode == 0, result.stderr
+    clip = json.loads(json_path.read_text(encoding="utf-8"))["clips"][0]
+    assert clip["clip"]["start_timecode"] == timecode
+    assert clip["clip"]["end_timecode"] == expected_end
+    assert [capture["actual_timecode"] for capture in clip["captures"]] == [expected_start, expected_end]
+    assert "start_timecode_missing" not in clip["warnings"]

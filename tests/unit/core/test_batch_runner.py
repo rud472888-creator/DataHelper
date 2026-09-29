@@ -94,7 +94,7 @@ def test_run_batch_emits_truthful_progress_and_output_paths(tmp_path: Path, monk
     monkeypatch.setattr(
         batch_runner,
         "resolve_adapter",
-        lambda current_candidate, _settings: AdapterSelection(current_candidate, FormatFamily.STANDARD, "ffmpeg", adapter),
+        lambda current_candidate, _settings, **_kwargs: AdapterSelection(current_candidate, FormatFamily.STANDARD, "ffmpeg", adapter),
     )
 
     def fake_render_pdf(output_path: Path, _settings: AppSettings, _items: object, _summary: object) -> None:
@@ -162,7 +162,7 @@ def test_run_batch_honors_cancellation_between_clips(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         batch_runner,
         "resolve_adapter",
-        lambda candidate, _settings: AdapterSelection(candidate, FormatFamily.STANDARD, "ffmpeg", _FakeAdapter(make_clip(candidate))),
+        lambda candidate, _settings, **_kwargs: AdapterSelection(candidate, FormatFamily.STANDARD, "ffmpeg", _FakeAdapter(make_clip(candidate))),
     )
 
     cancel_token = batch_runner.BatchCancelToken()
@@ -236,7 +236,7 @@ def test_run_batch_cleans_partial_output_artifacts_when_manifest_write_fails(tmp
     monkeypatch.setattr(
         batch_runner,
         "resolve_adapter",
-        lambda current_candidate, _settings: AdapterSelection(current_candidate, FormatFamily.STANDARD, "ffmpeg", adapter),
+        lambda current_candidate, _settings, **_kwargs: AdapterSelection(current_candidate, FormatFamily.STANDARD, "ffmpeg", adapter),
     )
 
     def fake_render_pdf(output_path: Path, _settings: AppSettings, _items: object, _summary: object) -> None:
@@ -297,7 +297,7 @@ def test_run_batch_uses_app_owned_staging_and_leaves_source_bytes_unchanged(
     monkeypatch.setattr(
         batch_runner,
         "resolve_adapter",
-        lambda current_candidate, _settings: AdapterSelection(current_candidate, FormatFamily.STANDARD, "ffmpeg", adapter),
+        lambda current_candidate, _settings, **_kwargs: AdapterSelection(current_candidate, FormatFamily.STANDARD, "ffmpeg", adapter),
     )
 
     def fake_run_captures(

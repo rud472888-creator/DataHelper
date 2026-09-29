@@ -101,22 +101,22 @@ def _frames_to_timecode(total_frames: int, nominal_fps: int, drop_frame: bool) -
         hours, minutes = divmod(minutes_total, 60)
         return ParsedTimecode(hours=hours % 24, minutes=minutes, seconds=seconds, frames=frames, drop_frame=False)
 
+    # SMPTE drop-frame: frame numbers 0..D-1 are skipped at the start of every
+    # minute except each tenth minute, so re-insert them before splitting.
     drop_frames = _drop_frame_count(nominal_fps)
-    frames_per_hour = nominal_fps * 60 * 60 - drop_frames * 54
-    frames_per_24_hours = frames_per_hour * 24
-    frames_per_10_minutes = nominal_fps * 60 * 10 - drop_frames * 9
     frames_per_minute = nominal_fps * 60 - drop_frames
+    frames_per_10_minutes = frames_per_minute * 10 + drop_frames
+    frames_per_24_hours = frames_per_10_minutes * 6 * 24
 
     remaining = total_frames % frames_per_24_hours
-    hours = remaining // frames_per_hour
-    remaining %= frames_per_hour
-    tens_of_minutes = remaining // frames_per_10_minutes
-    remaining %= frames_per_10_minutes
-    minutes = tens_of_minutes * 10 + remaining // frames_per_minute
-    remaining %= frames_per_minute
-    if minutes % 10 != 0:
-        remaining += drop_frames
-    seconds, frames = divmod(remaining, nominal_fps)
+    tens_of_minutes, frames_in_block = divmod(remaining, frames_per_10_minutes)
+    remaining += drop_frames * 9 * tens_of_minutes
+    if frames_in_block > drop_frames:
+        remaining += drop_frames * ((frames_in_block - drop_frames) // frames_per_minute)
+
+    seconds_total, frames = divmod(remaining, nominal_fps)
+    minutes_total, seconds = divmod(seconds_total, 60)
+    hours, minutes = divmod(minutes_total, 60)
     return ParsedTimecode(hours=hours, minutes=minutes, seconds=seconds, frames=frames, drop_frame=True)
 
 
@@ -196,6 +196,19 @@ def calculate_timecode_display(
     )
 
 
+def _frame_offset(
+    frame_index: int | None,
+    seconds: float | None,
+    fps_num: int | None,
+    fps_den: int | None,
+) -> int | None:
+    if frame_index is not None:
+        return frame_index
+    if seconds is None or fps_num is None or fps_den is None or fps_num <= 0 or fps_den <= 0:
+        return None
+    return round(seconds * fps_num / fps_den)
+
+
 def resolve_timecode_display(
     *,
     actual_timecode: str | None,
@@ -217,7 +230,7 @@ def resolve_timecode_display(
 
     calculated = calculate_timecode_display(
         start_timecode=start_timecode,
-        frame_offset=actual_frame_index,
+        frame_offset=_frame_offset(actual_frame_index, actual_seconds, fps_num, fps_den),
         fps_num=fps_num,
         fps_den=fps_den,
         tc_drop_frame=tc_drop_frame,
