@@ -57,6 +57,7 @@ def test_r3d_adapter_includes_part_files_and_logical_clip_name(tmp_path: Path, m
         "\n".join(
             [
                 "#!/usr/bin/env python3",
+                "import base64",
                 "import json",
                 "import os",
                 "import pathlib",
@@ -75,7 +76,7 @@ def test_r3d_adapter_includes_part_files_and_logical_clip_name(tmp_path: Path, m
                 "    for index, point in enumerate(payload['capture_points'], start=1):",
                 "        output_path = pathlib.Path(payload['options']['staging_dir']) / f\"{index:02d}_{point['label'].lower()}.png\"",
                 "        output_path.parent.mkdir(parents=True, exist_ok=True)",
-                "        output_path.write_bytes(b'png')",
+                "        output_path.write_bytes(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'))",
                 "        captures.append({'label': point['label'], 'requested_ratio': point['requested_ratio'], 'requested_frame_index': point['requested_frame_index'], 'requested_seconds': point['requested_seconds'], 'actual_frame_index': point['requested_frame_index'], 'actual_seconds': None if point['requested_frame_index'] is None else point['requested_frame_index'] / 25.0, 'actual_timecode': None, 'actual_timecode_source': None, 'image_path_temp': str(output_path), 'duplicate_of': None, 'status': 'success', 'warnings': [], 'errors': []})",
                 "    response = {'request_id': request_id, 'ok': True, 'adapter_name': 'r3d_adapter', 'adapter_version': '1.0.0', 'status': 'success', 'warnings': [], 'errors': [], 'captures': captures, 'metadata_raw': {}}",
                 "else:",

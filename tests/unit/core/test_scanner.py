@@ -35,6 +35,19 @@ def test_scan_inputs_honors_non_recursive_mode(tmp_path: Path) -> None:
     assert result == (top_level.resolve(),)
 
 
+def test_scan_inputs_ignores_appledouble_sidecar_media_names(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    clip = source_root / "PACR0155.MOV"
+    appledouble = source_root / "._PACR0155.MOV"
+    clip.write_bytes(b"movie")
+    appledouble.write_bytes(b"metadata")
+
+    result = scan_inputs((source_root,), recursive=False, extensions=("mov",))
+
+    assert result == (clip.resolve(),)
+
+
 def test_scan_inputs_supports_non_ascii_and_space_filled_paths(tmp_path: Path) -> None:
     source_root = tmp_path / "소스 폴더"
     source_root.mkdir()

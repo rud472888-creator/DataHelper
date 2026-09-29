@@ -12,7 +12,7 @@ authors = [{ name = "Frame Proof" }]
 dependencies = [
   "Pillow>=10.0",
   "PySide6>=6.7",
-  "reportlab>=4.0",
+  "reportlab>=4.4",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +31,9 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"frameproof.render" = ["fonts/*.ttf", "fonts/OFL.txt", "fonts/README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

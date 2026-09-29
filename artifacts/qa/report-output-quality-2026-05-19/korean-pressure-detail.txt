@@ -1,0 +1,386 @@
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_1_A-CAM_take-2026_05_18_FINAL_v0...
+Layout A / detail
+
+Project: 무선 카메라 제어 및 현장 스... Generated: 2026-05-19 00:20
+Counts snapshot: total=6 success=5 partial=1 failed=0
+Source path: clip-1.mov
+
+Input summary: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는...
+
+Metadata
+
+Start
+
+End
+
+Format: standard
+Container: unknown
+Codec: prores
+Resolution: 1920x1080
+Frame count: 48
+FPS: 24.000fps
+Duration: 2.000s
+Timecode range: N/A -> N/A
+Camera: Reel / Camera ID: - / -
+
+Requested ratio: 0.000
+Requested frame: 0
+Requested time: 0.000s
+Actual frame: 0
+Actual time: 0.000s
+Actual timecode: 01:00:00:00
+
+Requested ratio: 1.000
+Requested frame: 47
+Requested time: 1.958s
+Actual frame: 47
+Actual time: 1.958s
+Actual timecode: 01:00:01:23
+
+none
+
+none
+
+Warnings And Errors
+
+Raw Metadata Summary
+
+No clip-level warnings or errors.
+
+identifier: A-CAM_take-2026_05_18_FINAL_v003
+missing_note: review_url:
+https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_
+FINAL_v003
+row_count: 47,200건
+검증률: 98.7%
+처리 시간: 2.3초
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: 무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서
+
+Page 1
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_2_A-CAM_take-2026_05_18_FINAL_v0...
+Layout A / detail
+
+Project: 무선 카메라 제어 및 현장 스... Generated: 2026-05-19 00:20
+Counts snapshot: total=6 success=5 partial=1 failed=0
+Source path: clip-2.mov
+
+Input summary: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는...
+
+Metadata
+
+Start
+
+End
+
+Format: standard
+Container: unknown
+Codec: prores
+Resolution: 1920x1080
+Frame count: 48
+FPS: 24.000fps
+Duration: 2.000s
+Timecode range: N/A -> N/A
+Camera: Reel / Camera ID: - / -
+
+Requested ratio: 0.000
+Requested frame: 0
+Requested time: 0.000s
+Actual frame: 0
+Actual time: 0.000s
+Actual timecode: 01:00:00:00
+
+Requested ratio: 1.000
+Requested frame: 47
+Requested time: 1.958s
+Actual frame: 47
+Actual time: 1.958s
+Actual timecode: 01:00:01:23
+
+success
+none
+
+Warnings And Errors
+
+none
+
+Raw Metadata Summary
+
+Warning: 촬영감독과 스크립터가 동시에 확인해야 하는 상태값 확인 필요
+
+identifier: A-CAM_take-2026_05_18_FINAL_v003
+missing_note: review_url:
+https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_
+FINAL_v003
+row_count: 47,200건
+검증률: 98.7%
+처리 시간: 2.3초
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: 무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서
+
+Page 2
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_3_A-CAM_take-2026_05_18_FINAL_v0...
+Layout A / detail
+
+Project: 무선 카메라 제어 및 현장 스... Generated: 2026-05-19 00:20
+Counts snapshot: total=6 success=5 partial=1 failed=0
+Source path: clip-3.mov
+
+Input summary: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는...
+
+Metadata
+
+Start
+
+End
+
+Format: standard
+Container: unknown
+Codec: unknown
+Resolution: 1920x1080
+Frame count: 48
+FPS: 24.000fps
+Duration: 2.000s
+Timecode range: N/A -> N/A
+Camera: Reel / Camera ID: - / -
+
+Requested ratio: 0.000
+Requested frame: 0
+Requested time: 0.000s
+Actual frame: 0
+Actual time: 0.000s
+Actual timecode: 01:00:00:00
+
+Requested ratio: 1.000
+Requested frame: 47
+Requested time: 1.958s
+Actual frame: 47
+Actual time: 1.958s
+Actual timecode: 01:00:01:23
+
+none
+
+none
+
+Warnings And Errors
+
+Raw Metadata Summary
+
+No clip-level warnings or errors.
+
+identifier: A-CAM_take-2026_05_18_FINAL_v003
+missing_note: review_url:
+https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_
+FINAL_v003
+row_count: 47,200건
+검증률: 98.7%
+처리 시간: 2.3초
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: 무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서
+
+Page 3
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_4_A-CAM_take-2026_05_18_FINAL_v0...
+Layout A / detail
+
+Project: 무선 카메라 제어 및 현장 스... Generated: 2026-05-19 00:20
+Counts snapshot: total=6 success=5 partial=1 failed=0
+Source path: clip-4.mov
+
+Input summary: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는...
+
+Metadata
+
+Start
+
+End
+
+Format: standard
+Container: unknown
+Codec: prores
+Resolution: 1920x1080
+Frame count: 48
+FPS: 24.000fps
+Duration: 2.000s
+Timecode range: N/A -> N/A
+Camera: Reel / Camera ID: - / -
+
+Requested ratio: 0.000
+Requested frame: 0
+Requested time: 0.000s
+Actual frame: 0
+Actual time: 0.000s
+Actual timecode: 01:00:00:00
+
+Requested ratio: 1.000
+Requested frame: 47
+Requested time: 1.958s
+Actual frame: 47
+Actual time: 1.958s
+Actual timecode: 01:00:01:23
+
+none
+
+none
+
+Warnings And Errors
+
+Raw Metadata Summary
+
+No clip-level warnings or errors.
+
+identifier: A-CAM_take-2026_05_18_FINAL_v003
+missing_note: review_url:
+https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_
+FINAL_v003
+row_count: 47,200건
+검증률: 98.7%
+처리 시간: 2.3초
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: 무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서
+
+Page 4
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_5_A-CAM_take-2026_05_18_FINAL_v0...
+Layout A / detail
+
+Project: 무선 카메라 제어 및 현장 스... Generated: 2026-05-19 00:20
+Counts snapshot: total=6 success=5 partial=1 failed=0
+Source path: clip-5.mov
+
+Input summary: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는...
+
+Metadata
+
+Start
+
+End
+
+Format: standard
+Container: unknown
+Codec: prores
+Resolution: 1920x1080
+Frame count: 48
+FPS: 24.000fps
+Duration: 2.000s
+Timecode range: N/A -> N/A
+Camera: Reel / Camera ID: - / -
+
+Requested ratio: 0.000
+Requested frame: 0
+Requested time: 0.000s
+Actual frame: 0
+Actual time: 0.000s
+Actual timecode: 01:00:00:00
+
+Requested ratio: 1.000
+Requested frame: 47
+Requested time: 1.958s
+Actual frame: 47
+Actual time: 1.958s
+Actual timecode: 01:00:01:23
+
+none
+
+none
+
+Warnings And Errors
+
+Raw Metadata Summary
+
+No clip-level warnings or errors.
+
+identifier: A-CAM_take-2026_05_18_FINAL_v003
+missing_note: review_url:
+https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_
+FINAL_v003
+row_count: 47,200건
+검증률: 98.7%
+처리 시간: 2.3초
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: 무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서
+
+Page 5
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_6_A-CAM_take-2026_05_18_FINAL_v0...
+Layout A / detail
+
+Project: 무선 카메라 제어 및 현장 스... Generated: 2026-05-19 00:20
+Counts snapshot: total=6 success=5 partial=1 failed=0
+Source path: clip-6.mov
+
+Input summary: .../Volumes/HOTDRIVE/촬영감독과 스크립터가 동시에 확인해야 하는...
+
+Metadata
+
+Start
+
+End
+
+Format: standard
+Container: unknown
+Codec: prores
+Resolution: 1920x1080
+Frame count: 48
+FPS: 24.000fps
+Duration: 2.000s
+Timecode range: N/A -> N/A
+Camera: Reel / Camera ID: - / -
+
+Requested ratio: 0.000
+Requested frame: 0
+Requested time: 0.000s
+Actual frame: 0
+Actual time: 0.000s
+Actual timecode: 01:00:00:00
+
+Requested ratio: 1.000
+Requested frame: 47
+Requested time: 1.958s
+Actual frame: 47
+Actual time: 1.958s
+Actual timecode: 01:00:01:23
+
+none
+
+none
+
+Warnings And Errors
+
+Raw Metadata Summary
+
+No clip-level warnings or errors.
+
+identifier: A-CAM_take-2026_05_18_FINAL_v003
+missing_note: review_url:
+https://example.com/reports/blackmagician/session/day-01/take/A-CAM_take-2026_05_18_
+FINAL_v003
+row_count: 47,200건
+검증률: 98.7%
+처리 시간: 2.3초
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: 무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서
+
+Page 6
+
+Failed / Partial Clips
+Failures, partial clips, and skipped clips remain visible for operator review.
+
+무선 카메라 제어 및 현장 스크립트 기록 통합 검증 보고서_2_A-CAM_take-2026_05_18_FINAL_v003.mov [partial_success]
+Source: clip-2.mov
+Warning: 촬영감독과 스크립터가 동시에 확인해야 하는 상태값 확인 필요
+
+Original media untouched; PDF uses embedded preview frames only.
+Report file: korean-pressure-detail.pdf
+
+Page 7
+
+

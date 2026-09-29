@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from PIL import Image, UnidentifiedImageError
+
 from frameproof.adapters.base import CaptureAdapter
 from frameproof.config.settings import AdapterSettings
 from frameproof.core.dependency_inspector import AdapterAvailability, DependencyInspector
@@ -486,6 +488,33 @@ def _build_capture_result(payload: Mapping[str, object], expected: CaptureReques
         raise ValueError("capture.requested_seconds must round-trip exactly")
     status = CaptureStatus(_require_text(payload.get("status"), "capture.status"))
     actual_timecode_source = _optional_text(payload.get("actual_timecode_source"))
+    image_path_temp = _optional_text(payload.get("image_path_temp"))
+    duplicate_of = _optional_text(payload.get("duplicate_of"))
+    warnings = _parse_string_list(payload.get("warnings"))
+    errors = _parse_adapter_errors(payload.get("errors"))
+    if status is CaptureStatus.SUCCESS and duplicate_of is None:
+        decode_error = _png_decode_error(image_path_temp)
+        if decode_error is not None:
+            return CaptureResult(
+                label=label,
+                requested_ratio=requested_ratio,
+                requested_frame_index=requested_frame_index,
+                requested_seconds=requested_seconds,
+                actual_frame_index=_optional_int(payload.get("actual_frame_index")),
+                actual_seconds=_optional_float(payload.get("actual_seconds")),
+                actual_timecode=_optional_text(payload.get("actual_timecode")),
+                actual_timecode_source=TimecodeSource(actual_timecode_source) if actual_timecode_source is not None else None,
+                duplicate_of=duplicate_of,
+                status=CaptureStatus.DECODE_FAILED,
+                warnings=warnings,
+                errors=(
+                    AdapterError(
+                        code=AdapterErrorCode.DECODE_FAILED,
+                        message=decode_error,
+                        detail={"image_path_temp": image_path_temp} if image_path_temp else {},
+                    ),
+                ),
+            )
     return CaptureResult(
         label=label,
         requested_ratio=requested_ratio,
@@ -495,12 +524,30 @@ def _build_capture_result(payload: Mapping[str, object], expected: CaptureReques
         actual_seconds=_optional_float(payload.get("actual_seconds")),
         actual_timecode=_optional_text(payload.get("actual_timecode")),
         actual_timecode_source=TimecodeSource(actual_timecode_source) if actual_timecode_source is not None else None,
-        image_path_temp=_optional_text(payload.get("image_path_temp")),
-        duplicate_of=_optional_text(payload.get("duplicate_of")),
+        image_path_temp=image_path_temp,
+        duplicate_of=duplicate_of,
         status=status,
-        warnings=_parse_string_list(payload.get("warnings")),
-        errors=_parse_adapter_errors(payload.get("errors")),
+        warnings=warnings,
+        errors=errors,
     )
+
+
+def _png_decode_error(image_path_temp: str | None) -> str | None:
+    if image_path_temp is None:
+        return "adapter reported success without image_path_temp"
+    image_path = Path(image_path_temp)
+    try:
+        if not image_path.is_file():
+            return "adapter image_path_temp does not exist"
+        if image_path.stat().st_size <= 0:
+            return "adapter image_path_temp is empty"
+        with Image.open(image_path) as image:
+            image.verify()
+            if image.format != "PNG":
+                return "adapter image_path_temp is not a PNG"
+    except (OSError, SyntaxError, UnidentifiedImageError):
+        return "adapter image_path_temp is not a readable PNG"
+    return None
 
 
 def _failed_capture_results(
